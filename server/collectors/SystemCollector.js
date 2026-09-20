@@ -199,8 +199,16 @@ export class SystemCollector {
     }
   }
 
-  /** Collect unified memory metrics. */
+  /**
+   * Collect unified memory metrics.
+   *
+   * Only a DGX Spark shares one pool between CPU and GPU. A `host` unit is a
+   * discrete-GPU box, where adding VRAM to system RAM reports a fantasy
+   * percentage and a false OOM risk — return null so the API omits the field.
+   * The GPU panel already carries that unit's VRAM numbers.
+   */
   async collectUnifiedMemory() {
+    if (this.spark.kind === "host") return null;
     if (!this.spark.isLocal) return this._getRemoteUnifiedMemory();
     try {
       return await this._getUnifiedMemory();
