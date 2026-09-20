@@ -119,8 +119,8 @@ export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuP
 
       {/* NVIDIA throttle / thermal slowdown + SM clock headroom */}
       {(() => {
-        const t = gpu?.throttle;
-        const reason = t?.reason ?? "ok";
+        const throttle = gpu?.throttle;
+        const reason = throttle?.reason ?? "ok";
         const chipLabel =
           reason === "thermal"
             ? "Thermal"
@@ -141,15 +141,15 @@ export function GpuPanel({ gpu, cpu, sparkId, temperatureUnit, className }: GpuP
             : reason === "power" || reason === "hw"
               ? "bg-warning"
               : "bg-accent";
-        const pct = t?.smClockPct;
+        const pct = throttle?.smClockPct;
         const clockCaption =
-          t?.smClockMHz != null && t?.smClockMaxMHz != null
-            ? `${t.smClockMHz} / ${t.smClockMaxMHz} MHz`
+          throttle?.smClockMHz != null && throttle?.smClockMaxMHz != null
+            ? `${throttle.smClockMHz} / ${throttle.smClockMaxMHz} MHz`
             : pct != null
               ? `${pct}%`
               : "—";
         return (
-          <div className="space-y-1.5" title={t?.detail ?? undefined}>
+          <div className="space-y-1.5" title={throttle?.detail ?? undefined}>
             <div className="flex items-center justify-between gap-2 text-sm">
               <span className="text-muted">{t("Throttle")}</span>
               <span

@@ -39,13 +39,21 @@ are appended. Wrap logic lives in `tools/i18n-extract.mjs`:
 ## Verification
 
 ```bash
-python3 tools/verify_i18n.py      # real browser: render, en↔zh switch, save, persist
-python3 tools/verify_dialogs.py   # real browser: one deep dialog is translated
+python3 tools/verify_i18n.py       # real browser: render, en↔zh switch, save, persist
+python3 tools/verify_dialogs.py    # real browser: one deep dialog is translated
+python3 tools/verify_host_unit.py  # real browser: a host/GPU unit page renders
+npm run i18n:check                 # no t() call site is shadowed by a local `t`
 ```
 
-Both drive Chrome through Playwright, fail on console errors or 4xx/5xx, and
-write screenshots to `/root/i18n-verify/`. Run them after any dictionary change —
-a missing `t` import or an unwrapped string shows up here and nowhere else.
+The browser checks drive Chrome through Playwright, fail on console errors or
+4xx/5xx, and write screenshots to `/root/i18n-verify/`. Run them after any
+dictionary change — a missing `t` import, an unwrapped string or a shadowed `t`
+shows up here and nowhere else.
+
+**Why `i18n:check` exists:** a local variable named `t` (very common — a timer
+handle, a throttle object, a `.map((t) => …)` item) silently shadows the
+imported translator. The build stays green and the page then blanks with
+`t is not a function` at runtime, which no screenshot-free check can catch.
 
 ## Notes
 
