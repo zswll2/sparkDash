@@ -7,6 +7,9 @@ import { sshExec } from "./ssh.js";
 const NVERR_JOURNAL_CMD =
   'journalctl -k --no-pager -q --grep=NV_ERR_NO_MEMORY 2>/dev/null | grep -c NV_ERR_NO_MEMORY || true';
 
+/** Where nvidia-smi normally lives; used to detect a GPU-less target. */
+const NVIDIA_SMI_PATHS = ["/usr/bin/nvidia-smi", "/usr/local/nvidia/bin/nvidia-smi"];
+
 /**
  * Parse `grep -c` stdout into a non-negative integer. Exported for tests.
  * @param {unknown} raw
@@ -69,6 +72,11 @@ export class SystemCollector {
 
   /** Collect GPU metrics (temperature, usage, power, VRAM). */
   async collectGpu() {
+    // A target with no NVIDIA GPU at all (a hypervisor, an AMD-only box) has no
+    // GPU panel to fill: return null so the field is omitted instead of showing
+    // zeros or — worse, see the kind === "host" VRAM fallback — the OS RAM
+    // reported as VRAM.
+    if (!(await this._hasNvidiaGpu())) return null;
     try {
       const gpuData = this.spark.isLocal
         ? await this._getGPUAll()
@@ -78,6 +86,36 @@ export class SystemCollector {
       console.error(`[SystemCollector] GPU error for ${this.spark.id}:`, err.message);
       return tagCollectionResult(this._defaultGpu(), false);
     }
+  }
+
+  /**
+   * Cached "does the target have an NVIDIA GPU?" probe. Local asks the
+   * filesystem, remote runs `command -v nvidia-smi` once over SSH. An SSH
+   * failure is NOT cached and answers true, so a real GPU host keeps reporting
+   * its own errors through the normal path.
+   */
+  async _hasNvidiaGpu() {
+    if (this._nvidiaGpuKnown !== undefined) return this._nvidiaGpuKnown;
+    if (this.spark.isLocal) {
+      this._nvidiaGpuKnown = NVIDIA_SMI_PATHS.some((candidate) => {
+        try {
+          return fs.existsSync(candidate);
+        } catch {
+          return false;
+        }
+      });
+      return this._nvidiaGpuKnown;
+    }
+    try {
+      const output = await sshExec(
+        this.spark,
+        "command -v nvidia-smi >/dev/null 2>&1 && echo YES || echo NO"
+      );
+      this._nvidiaGpuKnown = /\bYES\b/.test(output);
+    } catch {
+      return true;
+    }
+    return this._nvidiaGpuKnown;
   }
 
   /** Collect CPU metrics (usage, temperature, power). */
@@ -1519,7 +1557,7 @@ export class SystemCollector {
         : null;
 
       return {
-        device: "Linux GPU host",
+        device: gpuChip ? "Linux GPU host" : "Linux host",
         cpuModel,
         cpuCores,
         totalMemoryGB,
@@ -1674,12 +1712,11 @@ export class SystemCollector {
 
   // resolve nvidia-smi path
   _resolveNvidiaSmiPath() {
-    const candidates = ["/usr/bin/nvidia-smi", "/usr/local/nvidia/bin/nvidia-smi", "nvidia-smi"];
-    for (const p of candidates) {
+    for (const candidate of NVIDIA_SMI_PATHS) {
       try {
-        if (fs.existsSync(p)) {
-          this._nvidiaSmiPath = p;
-          return p;
+        if (fs.existsSync(candidate)) {
+          this._nvidiaSmiPath = candidate;
+          return candidate;
         }
       } catch {}
     }

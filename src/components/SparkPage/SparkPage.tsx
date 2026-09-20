@@ -12,6 +12,7 @@ import { TailscalePanel } from "./TailscalePanel";
 import { LlmPanel } from "./LlmPanel";
 import { ComfyPanel } from "./ComfyPanel";
 import { ChevronDownIcon } from "../ui/icons";
+import { Panel } from "../ui/Panel";
 import { t } from "../../i18n";
 
 interface SparkPageProps {
@@ -242,12 +243,25 @@ export function SparkPage({
             {spark.kind === "host" ? (
               /* Hosts: GPU spans the full left column; RAM → Network → Storage [→ Tailnet] stack in the right column */
               <>
-                <GpuPanel
-                  gpu={metrics.gpu}
-                  sparkId={spark.id}
-                  temperatureUnit={temperatureUnit}
-                  className={tailscaleOn ? "md:row-span-4" : "md:row-span-3"}
-                />
+                {metrics.gpu ? (
+                  <GpuPanel
+                    gpu={metrics.gpu}
+                    sparkId={spark.id}
+                    temperatureUnit={temperatureUnit}
+                    className={tailscaleOn ? "md:row-span-4" : "md:row-span-3"}
+                  />
+                ) : (
+                  /* No NVIDIA GPU on this host (a hypervisor, an AMD-only box):
+                     an empty GPU card with 0°C / 0 W reads as a broken sensor. */
+                  <Panel
+                    title={t("GPU")}
+                    className={tailscaleOn ? "md:row-span-4" : "md:row-span-3"}
+                  >
+                    <p className="text-xs text-muted">
+                      {t("No NVIDIA GPU detected on this host (nvidia-smi is not available).")}
+                    </p>
+                  </Panel>
+                )}
                 <RamPanel
                   ram={metrics.ram}
                   cpu={metrics.cpu}

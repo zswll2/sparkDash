@@ -111,8 +111,8 @@ export function SparkHeader({ spark, onEdit }: SparkHeaderProps) {
           </div>
           <p className="truncate text-xs text-muted">
             {hardware.gpuChip
-              ? `${hardware.device} · ${hardware.gpuChip}`
-              : hardware.device}
+              ? `${t(hardware.device)} · ${hardware.gpuChip}`
+              : t(hardware.device)}
           </p>
         </div>
       </div>
