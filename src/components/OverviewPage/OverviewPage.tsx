@@ -104,6 +104,18 @@ function SparkCard({
   const vramTotal = gpu?.vram?.total ?? um?.total ?? 0;
   const vramAvail = gpu?.vram?.available ?? um?.available ?? 0;
 
+  /**
+   * A GPU-less host (a hypervisor, a NAS) still reports CPU, RAM and storage.
+   * Gating the card on the GPU alone left those units stuck on "Waiting for
+   * metrics…" forever, with all their real data hidden.
+   */
+  const hasMetrics =
+    Boolean(gpu) ||
+    spark.metrics.cpu.temperature > 0 ||
+    spark.metrics.cpu.usage > 0 ||
+    spark.metrics.ram.total > 0 ||
+    spark.metrics.storage.length > 0;
+
   // Temperature bar: cool → success, warm → warning, hot → danger
   const tempBarColor =
     tempRaw > 85 ? "bg-danger" : tempRaw > 65 ? "bg-warning" : tempRaw > 40 ? "bg-accent" : "bg-success";
@@ -199,7 +211,7 @@ function SparkCard({
         </span>
       </div>
 
-      {!online || !gpu ? (
+      {!online || !hasMetrics ? (
         <div className="flex h-[120px] items-center justify-center">
           <span className="text-[13px] text-muted">
             {online ? t("Waiting for metrics…") : t("Host unreachable")}
@@ -209,13 +221,15 @@ function SparkCard({
         <>
           {/* Three headline bars: GPU alloc, Temp, Usage */}
           <div className="flex flex-col gap-3.5">
-            <MetricBar
-              label={t("VRAM")}
-              value={vramUsed}
-              max={vramTotal}
-              color={vramBarColor}
-              caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
-            />
+            {(gpu || um) && (
+              <MetricBar
+                label={t("VRAM")}
+                value={vramUsed}
+                max={vramTotal}
+                color={vramBarColor}
+                caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
+              />
+            )}
             {spark.kind === "host" && (() => {
               // Non-Spark hosts: system RAM is separate from discrete VRAM.
               const ram = spark.metrics.ram;
@@ -233,17 +247,19 @@ function SparkCard({
                 />
               );
             })()}
-            <MetricBar
-              label={
-                spark.kind === "host" || (spark.metrics.cpu?.temperature ?? 0) > 0
-                  ? t("GPU")
-                  : t("Temperature")
-              }
-              value={displayTemp}
-              max={temperatureUnit === "fahrenheit" ? 212 : 100}
-              color={tempBarColor}
-              caption={tempLabel}
-            />
+            {gpu && (
+              <MetricBar
+                label={
+                  spark.kind === "host" || spark.metrics.cpu.temperature > 0
+                    ? t("GPU")
+                    : t("Temperature")
+                }
+                value={displayTemp}
+                max={temperatureUnit === "fahrenheit" ? 212 : 100}
+                color={tempBarColor}
+                caption={tempLabel}
+              />
+            )}
             {(spark.metrics.cpu?.temperature ?? 0) > 0 && (() => {
               const cpuRaw = spark.metrics.cpu?.temperature ?? 0;
               const cpuDisplay =
@@ -270,21 +286,37 @@ function SparkCard({
                 {t("Thermal throttle")}
               </div>
             )}
-            <MetricBar
-              label={t("Usage")}
-              value={usage}
-              max={100}
-              color={usageBarColor}
-              caption={`${usage}%`}
-            />
+            {gpu && (
+              <MetricBar
+                label={t("Usage")}
+                value={usage}
+                max={100}
+                color={usageBarColor}
+                caption={`${usage}%`}
+              />
+            )}
           </div>
 
           {/* Secondary stats */}
           <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-border pt-3.5">
-            <MiniStat
-              label={t("GPU Power")}
-              value={`${gpu?.power?.draw ?? 0}W / ${gpu?.power?.limit ?? 0}W`}
-            />
+            {gpu ? (
+              <MiniStat
+                label={t("GPU Power")}
+                value={`${gpu.power?.draw ?? 0}W / ${gpu.power?.limit ?? 0}W`}
+              />
+            ) : (
+              <>
+                {spark.metrics.cpu.usage > 0 && (
+                  <MiniStat label={t("CPU Usage")} value={`${spark.metrics.cpu.usage}%`} />
+                )}
+                {spark.metrics.cpu.draw > 0 && (
+                  <MiniStat
+                    label={t("CPU Power")}
+                    value={`${spark.metrics.cpu.draw}W / ${spark.metrics.cpu.tdp}W`}
+                  />
+                )}
+              </>
+            )}
             {vramAvail > 0 && (
               <MiniStat
                 label={t("Available")}
