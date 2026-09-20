@@ -4,6 +4,7 @@ import { Panel } from "../ui/Panel";
 import { MemoryIcon } from "../ui/icons";
 import { MetricBar } from "../ui/MetricBar";
 import { useMetricsHistoryTail } from "../../hooks/metricsStore";
+import { t } from "../../i18n";
 
 interface RamPanelProps {
   ram: RamMetrics | null;
@@ -48,7 +49,7 @@ export function RamPanel({ ram, cpu, sparkId, temperatureUnit, className }: RamP
 
   return (
     <Panel
-      title="RAM"
+      title={t("RAM")}
       icon={<MemoryIcon />}
       className={`panel-ram ${className ?? ""}`}
       bodyClassName="space-y-3"
@@ -56,7 +57,7 @@ export function RamPanel({ ram, cpu, sparkId, temperatureUnit, className }: RamP
       {total > 0 ? (
         <>
           <MetricBar
-            label="RAM"
+            label={t("RAM")}
             value={used}
             max={total}
             caption={
@@ -67,7 +68,7 @@ export function RamPanel({ ram, cpu, sparkId, temperatureUnit, className }: RamP
           />
           {history.length > 0 && (
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted">Usage</span>
+              <span className="text-muted">{t("Usage")}</span>
               <div className="flex items-center gap-3">
                 <Sparkline data={history} color="var(--color-accent)" width={180} />
                 <span className="font-tabular text-sm font-semibold text-text">{percentage}%</span>
@@ -77,13 +78,13 @@ export function RamPanel({ ram, cpu, sparkId, temperatureUnit, className }: RamP
         </>
       ) : (
         <div className="flex justify-between text-xs">
-          <span className="text-muted">RAM</span>
+          <span className="text-muted">{t("RAM")}</span>
           <span className="font-tabular text-text">—</span>
         </div>
       )}
       {temperature > 0 && (
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted">CPU</span>
+          <span className="text-muted">{t("CPU")}</span>
           <div className="flex items-center gap-3">
             <span style={{ color: tempColor }}>
               <Sparkline data={tempHistory} color={tempColor} width={180} />

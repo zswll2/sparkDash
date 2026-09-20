@@ -21,6 +21,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { SparkSnapshot } from "../api/types";
 import { PlusIcon, GridIcon } from "./ui/icons";
 import { OVERVIEW_ID } from "../constants";
+import { t } from "../i18n";
 
 interface SparkTabsProps {
   sparks: SparkSnapshot[];
@@ -175,7 +176,7 @@ function TabChrome({
       <button
         type="button"
         className="pill-handle"
-        title="Drag to reorder"
+        title={t("Drag to reorder")}
         aria-label={`Reorder ${spark.name}`}
         {...dragHandleProps}
       >
@@ -285,10 +286,10 @@ export function SparkTabs({
           type="button"
           className="icon-circle"
           onClick={() => setMobileMenuOpen((v) => !v)}
-          aria-label="Select Spark"
+          aria-label={t("Select Spark")}
           aria-expanded={mobileMenuOpen}
           aria-controls="mobile-spark-menu"
-          title="Select Spark"
+          title={t("Select Spark")}
         >
           <HamburgerIcon className="h-4 w-4" />
         </button>
@@ -331,7 +332,7 @@ export function SparkTabs({
 
   if (!canReorder) {
     return (
-      <nav className="pill-nav" aria-label="Sparks">
+      <nav className="pill-nav" aria-label={t("Sparks")}>
         <OverviewTab isActive={activeId === OVERVIEW_ID} onSelect={onSelect} />
         {sparks.map((spark) => (
           <div key={spark.id} className="shrink-0">
@@ -356,7 +357,7 @@ export function SparkTabs({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <nav className="pill-nav" aria-label="Sparks">
+      <nav className="pill-nav" aria-label={t("Sparks")}>
         <OverviewTab isActive={activeId === OVERVIEW_ID} onSelect={onSelect} />
         {/* rect (not horizontal-list) strategy: .pill-nav wraps onto several
             rows once there are more Sparks than fit one line, and the
@@ -394,8 +395,8 @@ function AddButton({ onAdd }: { onAdd: () => void }) {
     <button
       type="button"
       onClick={onAdd}
-      title="Add Spark/GPU Host"
-      aria-label="Add Spark/GPU Host"
+      title={t("Add Spark/GPU Host")}
+      aria-label={t("Add Spark/GPU Host")}
       className="pill-add shrink-0"
     >
       <PlusIcon className="h-3.5 w-3.5" />
@@ -419,7 +420,7 @@ function OverviewTab({
         aria-current={isActive ? "page" : undefined}
       >
         <GridIcon className="h-3.5 w-3.5" />
-        Overview
+        {t("Overview")}
       </button>
     </div>
   );
@@ -495,7 +496,7 @@ function MobileSparkMenu({
         onClick={() => handleItemClick(OVERVIEW_ID)}
       >
         <GridIcon className="h-3.5 w-3.5" />
-        Overview
+        {t("Overview")}
       </button>
       {sparks.map((spark) => (
         <button
@@ -521,7 +522,7 @@ function MobileSparkMenu({
         onClick={handleAddClick}
       >
         <PlusIcon className="h-3.5 w-3.5" />
-        Add Spark/GPU Host
+        {t("Add Spark/GPU Host")}
       </button>
     </div>
   );

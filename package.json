@@ -12,6 +12,8 @@
     "test": "npm run test:server && npm run test:frontend",
     "test:server": "node --test server/collectors/__tests__/*.test.js server/sparks/__tests__/*.test.js",
     "test:frontend": "vitest run",
+    "i18n:extract": "node tools/i18n-extract.mjs",
+    "i18n:build": "node tools/i18n-build.mjs",
     "preview": "vite preview",
     "start": "node server/index.js",
     "docker:up": "docker compose up -d",
@@ -40,6 +42,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@babel/parser": "^7.29.9",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

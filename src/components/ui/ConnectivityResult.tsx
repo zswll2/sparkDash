@@ -1,4 +1,5 @@
 import type { SparkTestResponse } from "../../api/types";
+import { t } from "../../i18n";
 
 export function ConnectivityResult({ result }: { result: SparkTestResponse }) {
   return (
@@ -7,13 +8,13 @@ export function ConnectivityResult({ result }: { result: SparkTestResponse }) {
       role="status"
     >
       <p className={result.ok ? "text-success" : "text-danger"}>
-        {result.ok ? "All required capabilities passed." : "One or more required capabilities failed."}
+        {result.ok ? t("All required capabilities passed.") : t("One or more required capabilities failed.")}
       </p>
       <ul className="mt-1 space-y-1">
         {result.capabilities.map((capability) => (
           <li key={capability.id} className={capability.status === "fail" ? "text-danger" : "text-muted"}>
             <strong>{capability.label}:</strong>{" "}
-            {capability.status === "pass" ? "Pass" : capability.status === "fail" ? "Fail" : "Skipped"}
+            {capability.status === "pass" ? t("Pass") : capability.status === "fail" ? t("Fail") : t("Skipped")}
             {capability.message ? ` — ${capability.message}` : ""}
             {capability.recovery ? ` ${capability.recovery}` : ""}
           </li>

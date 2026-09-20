@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SparkSnapshot } from "../../api/types";
+import { t } from "../../i18n";
 
 type Alert = { key: string; spark: SparkSnapshot; label: string; severity: "critical" | "warning" };
 
@@ -26,10 +27,10 @@ export function FleetAlertStrip({ sparks, onSelect }: { sparks: SparkSnapshot[];
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, [alerts]);
-  if (alerts.length === 0) return <p className="text-xs text-success" role="status">No active fleet exceptions.</p>;
+  if (alerts.length === 0) return <p className="text-xs text-success" role="status">{t("No active fleet exceptions.")}</p>;
   return (
     <section className="panel p-3" aria-labelledby="fleet-alerts-title">
-      <h2 id="fleet-alerts-title" className="text-xs font-semibold text-text-strong">Active fleet exceptions · {alerts.length}</h2>
+      <h2 id="fleet-alerts-title" className="text-xs font-semibold text-text-strong">{t("Active fleet exceptions ·")} {alerts.length}</h2>
       <ul className="mt-2 flex flex-wrap gap-2">
         {alerts.map((alert) => <li key={alert.key}>
           <button type="button" onClick={() => onSelect?.(alert.spark.id)} className={`min-h-11 rounded border px-3 py-2 text-left text-xs ${alert.severity === "critical" ? "border-danger/50 text-danger" : "border-warning/50 text-warning"}`}>

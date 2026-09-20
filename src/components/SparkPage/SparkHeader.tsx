@@ -1,6 +1,7 @@
 import type { SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
 import { SparkActions } from "./SparkActions";
+import { t } from "../../i18n";
 
 interface SparkHeaderProps {
   spark: SparkSnapshot;
@@ -32,7 +33,7 @@ export function SparkHeader({ spark, onEdit }: SparkHeaderProps) {
       <div className="flex items-center gap-2.5">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${online ? "bg-success dot-glow-success" : "bg-danger"}`}
-          title={online ? "Online" : "Offline"}
+          title={online ? t("Online") : t("Offline")}
         />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -86,15 +87,15 @@ export function SparkHeader({ spark, onEdit }: SparkHeaderProps) {
                 className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 font-tabular text-[10px] font-medium text-accent"
                 title={`Hermes Agent ${hermes.version} installed on this machine`}
               >
-                Hermes
+                {t("Hermes")}
               </span>
             )}
             {hermes?.monitoring && hermes.installed === false && hermes.checkedAt != null && (
               <span
                 className="shrink-0 rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-medium text-danger"
-                title="The `hermes` binary was not found on this machine (check the install path or Edit Spark)."
+                title={t("The `hermes` binary was not found on this machine (check the install path or Edit Spark).")}
               >
-                Hermes not found
+                {t("Hermes not found")}
               </span>
             )}
             {hermes?.monitoring &&
@@ -104,7 +105,7 @@ export function SparkHeader({ spark, onEdit }: SparkHeaderProps) {
                   className="max-w-[16rem] shrink-0 truncate rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-medium text-danger"
                   title={`Update check failed — it will retry automatically: ${hermes.error}`}
                 >
-                  Update check failed
+                  {t("Update check failed")}
                 </span>
               )}
           </div>

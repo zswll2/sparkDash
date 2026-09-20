@@ -33,6 +33,12 @@ const DEFAULTS = Object.freeze({
    * does not want it can turn it off here (see the README's settings table).
    */
   benchShareImage: true,
+  /**
+   * UI language. "en" keeps the original English strings, "zh" renders the
+   * Simplified Chinese dictionary (see src/i18n). Strings with no Chinese
+   * entry fall back to English, so a partial translation never shows blanks.
+   */
+  language: "en",
 });
 
 /** @type {typeof DEFAULTS} */
@@ -63,6 +69,10 @@ function _clampSettings(settings) {
   // Ensure density is valid
   if (s.density !== "comfortable" && s.density !== "compact") {
     s.density = DEFAULTS.density;
+  }
+  // Ensure language is valid
+  if (s.language !== "en" && s.language !== "zh") {
+    s.language = DEFAULTS.language;
   }
   return s;
 }

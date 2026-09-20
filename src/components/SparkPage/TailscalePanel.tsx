@@ -1,6 +1,7 @@
 import type { TailscaleMetrics } from "../../api/types";
 import { Panel } from "../ui/Panel";
 import { NetworkIcon } from "../ui/icons";
+import { t } from "../../i18n";
 
 interface TailscalePanelProps {
   tailscale: TailscaleMetrics | null;
@@ -25,9 +26,9 @@ export function TailscalePanel({ tailscale }: TailscalePanelProps) {
         : { label: "unknown", cls: "text-muted" };
 
   return (
-    <Panel title="Tailnet" accent={offTailnet} icon={<NetworkIcon />}>
+    <Panel title={t("Tailnet")} accent={offTailnet} icon={<NetworkIcon />}>
       <div className="mb-3 flex items-center gap-2 text-xs">
-        <span className="text-muted">Status</span>
+        <span className="text-muted">{t("Status")}</span>
         <span className={`font-tabular font-medium ${status.cls}`}>{status.label}</span>
         {tailscale?.backendState && (
           <span className="ml-auto chip py-0.5">{tailscale.backendState}</span>
@@ -54,13 +55,13 @@ export function TailscalePanel({ tailscale }: TailscalePanelProps) {
       )}
 
       <div className="space-y-2">
-        {tailscale?.tailscaleIp && <Row label="IP" value={tailscale.tailscaleIp} tabular />}
-        {tailscale?.hostName && <Row label="Host" value={tailscale.hostName} />}
-        {tailscale?.relay && <Row label="Relay" value={tailscale.relay} />}
-        {tailscale?.keyExpired && <Row label="Key" value="EXPIRED — needs re-auth" danger />}
-        {tailscale?.version && <Row label="Version" value={tailscale.version} tabular />}
+        {tailscale?.tailscaleIp && <Row label={t("IP")} value={tailscale.tailscaleIp} tabular />}
+        {tailscale?.hostName && <Row label={t("Host")} value={tailscale.hostName} />}
+        {tailscale?.relay && <Row label={t("Relay")} value={tailscale.relay} />}
+        {tailscale?.keyExpired && <Row label={t("Key")} value="EXPIRED — needs re-auth" danger />}
+        {tailscale?.version && <Row label={t("Version")} value={tailscale.version} tabular />}
         {!available && !tailscale?.error && (
-          <p className="text-xs text-muted">Waiting for first poll…</p>
+          <p className="text-xs text-muted">{t("Waiting for first poll…")}</p>
         )}
       </div>
     </Panel>

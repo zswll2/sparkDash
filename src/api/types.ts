@@ -564,6 +564,8 @@ export interface Settings {
   showOverviewSearch: boolean;
   /** Benchmark dialogs offer "Copy image" — a PNG share card of the results. */
   benchShareImage: boolean;
+  /** UI language — "en" (default) or "zh" (Simplified Chinese). */
+  language: "en" | "zh";
 }
 
 export interface SparksListResponse {

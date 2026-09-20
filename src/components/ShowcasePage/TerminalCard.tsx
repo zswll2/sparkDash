@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../i18n";
 
 export interface TerminalCardProps {
   label: string;
@@ -58,7 +59,7 @@ export function TerminalCard({
     <article className="showcase-term">
       <header className="showcase-term__header">
         <span className="showcase-term__label" title={label}>
-          {label || "Terminal"}
+          {label || t("Terminal")}
         </span>
         <span className={`showcase-term__status ${statusClass(status)}`}>{status}</span>
         <span
@@ -71,11 +72,11 @@ export function TerminalCard({
         >
           {liveTokPerSec > 0 || peakTokPerSec > 0 ? (
             <>
-              {(liveTokPerSec > 0 ? liveTokPerSec : peakTokPerSec).toFixed(0)} tok/s
+              {(liveTokPerSec > 0 ? liveTokPerSec : peakTokPerSec).toFixed(0)} {t("tok/s")}
               {peakTokPerSec > 0 && (
                 <span className="showcase-term__tps-peak">
                   {" "}
-                  peak {Math.max(peakTokPerSec, liveTokPerSec).toFixed(0)}
+                  {t("peak")} {Math.max(peakTokPerSec, liveTokPerSec).toFixed(0)}
                 </span>
               )}
             </>
@@ -88,9 +89,9 @@ export function TerminalCard({
             type="button"
             className="showcase-term__copy"
             onClick={onCopy}
-            title="Copy this terminal"
+            title={t("Copy this terminal")}
           >
-            {copied ? "Copied" : "Copy"}
+            {copied ? t("Copied") : t("Copy")}
           </button>
         )}
       </header>
@@ -105,7 +106,7 @@ export function TerminalCard({
         }}
       >
         {empty && status === "pending" && (
-          <pre className="showcase-term__answer">Waiting…</pre>
+          <pre className="showcase-term__answer">{t("Waiting…")}</pre>
         )}
         {hasReasoning && (
           <div className="showcase-term__reasoning">
@@ -115,9 +116,9 @@ export function TerminalCard({
               aria-expanded={reasoningOpen}
               onClick={() => setReasoningOpen((o) => !o)}
             >
-              {reasoningOpen ? "▾" : "▸"} Thinking
+              {reasoningOpen ? "▾" : "▸"} {t("Thinking")}
               <span className="showcase-term__reasoning-meta">
-                {reasoning.length.toLocaleString()} chars
+                {reasoning.length.toLocaleString()} {t("chars")}
               </span>
             </button>
             {reasoningOpen && (

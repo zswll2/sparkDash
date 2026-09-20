@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchLlmDaily } from "../../api/client";
 import type { LlmDailyDay } from "../../api/types";
+import { t } from "../../i18n";
 
 const CHART_W = 196;
 const CHART_H = 36;
@@ -63,21 +64,21 @@ export function LlmDailyChart({
     <div className="border-t border-border pt-3 space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] uppercase tracking-wide text-muted">
-          Daily peak tok/s
+          {t("Daily peak tok/s")}
         </span>
         <span className="text-[10px] text-muted">
-          {hasSplit ? "decode · uncached prefill" : "decode · prefill"} · 14d
+          {hasSplit ? t("decode · uncached prefill") : t("decode · prefill")} {t("· 14d")}
         </span>
       </div>
       {!busy ? (
-        <p className="text-[10px] text-muted">No busy samples in the last 14 days.</p>
+        <p className="text-[10px] text-muted">{t("No busy samples in the last 14 days.")}</p>
       ) : (
         <svg
           width={CHART_W}
           height={CHART_H}
           className="block max-w-full"
           role="img"
-          aria-label="Daily peak decode and prefill tokens per second"
+          aria-label={t("Daily peak decode and prefill tokens per second")}
         >
           {days.map((d, i) => {
             const x0 = i * slot;

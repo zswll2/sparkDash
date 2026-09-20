@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useModalPresence } from "../hooks/useModalPresence";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { PowerOffIcon } from "./ui/icons";
+import { t } from "../i18n";
 
 const CONFIRM_PHRASE = "poweroff";
 
@@ -97,7 +98,7 @@ export function ConfirmShutdownDialog({
       >
         <div className="modal-sheet__header flex items-center gap-2 text-danger" id={titleId}>
           <PowerOffIcon className="h-4 w-4 shrink-0" />
-          <span>Danger zone — {title}</span>
+          <span>{t("Danger zone —")} {title}</span>
         </div>
 
         <div className="modal-sheet__body space-y-3">
@@ -105,7 +106,7 @@ export function ConfirmShutdownDialog({
 
           <div className="rounded-md border border-danger/35 bg-danger/10 px-3 py-2.5">
             <p className="text-[11px] font-medium text-danger">
-              This powers off hardware. Running containers and sessions will stop.
+              {t("This powers off hardware. Running containers and sessions will stop.")}
             </p>
           </div>
 
@@ -117,12 +118,12 @@ export function ConfirmShutdownDialog({
               onChange={(e) => setAcknowledged(e.target.checked)}
               className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--color-danger)]"
             />
-            <span>I understand this cannot be undone from the dashboard.</span>
+            <span>{t("I understand this cannot be undone from the dashboard.")}</span>
           </label>
 
           <div>
             <label className="mb-1 block text-xs text-muted">
-              Type <span className="font-mono text-danger">{CONFIRM_PHRASE}</span> to confirm
+              {t("Type")} <span className="font-mono text-danger">{CONFIRM_PHRASE}</span> {t("to confirm")}
             </label>
             <input
               ref={inputRef}
@@ -152,7 +153,7 @@ export function ConfirmShutdownDialog({
               disabled={submitting}
               className="rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-50"
             >
-              Cancel
+              {t("Cancel")}
             </button>
             <button
               type="button"
@@ -160,7 +161,7 @@ export function ConfirmShutdownDialog({
               disabled={!canConfirm}
               className="rounded-md border border-danger/50 bg-danger px-3 py-1.5 text-xs font-medium text-white transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {submitting ? "Shutting down…" : confirmLabel}
+              {submitting ? t("Shutting down…") : confirmLabel}
             </button>
           </div>
         </div>

@@ -4,6 +4,7 @@ import { shutdownSpark, wakeSpark } from "../../api/client";
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { openHermesUpdateDialog } from "../../hooks/useHermesUpdateDialog";
 import { EditIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
+import { t } from "../../i18n";
 
 interface SparkActionsProps {
   spark: SparkSnapshot;
@@ -80,18 +81,18 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
         {hermesRunning && (
           <span
             className="flex items-center gap-1.5 text-[11px] text-warning"
-            title="Running `hermes update` on this machine via SSH — this can take a few minutes."
+            title={t("Running `hermes update` on this machine via SSH — this can take a few minutes.")}
           >
             <RotateIcon className="h-3 w-3" />
-            Hermes updating…
+            {t("Hermes updating…")}
           </span>
         )}
         {!hermesRunning && hermes?.monitoring && hermes.status === "error" && (
           <span
             className="max-w-[16rem] truncate text-[11px] text-danger"
-            title={hermes.error || "Hermes update failed"}
+            title={hermes.error || t("Hermes update failed")}
           >
-            Hermes update failed
+            {t("Hermes update failed")}
           </span>
         )}
         {!hermesRunning && hermes?.monitoring && hermes.installed !== false && (
@@ -104,7 +105,7 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
                 ? `Run "hermes update" on this machine via SSH${
                     hermes.behindCommits ? ` (${hermes.behindCommits} commits behind)` : ""
                   }`
-                : "Open Hermes Agent update status and run updates on this machine via SSH"
+                : t("Open Hermes Agent update status and run updates on this machine via SSH")
             }
             className={`flex items-center gap-1.5 rounded-md border bg-surface-elevated px-3 py-1.5 text-[11px] transition-colors disabled:opacity-50 ${
               hermes.updateAvailable === true
@@ -113,14 +114,14 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
             }`}
           >
             <RotateIcon className="h-3 w-3" />
-            Update Hermes
+            {t("Update Hermes")}
             {hermes.updateAvailable === true && (
               <span
                 className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[9px] font-bold leading-none text-white"
                 title={
                   hermes.behindCommits != null
                     ? `${hermes.behindCommits} commit${hermes.behindCommits === 1 ? "" : "s"} behind`
-                    : "Update available"
+                    : t("Update available")
                 }
               >
                 {hermes.behindCommits != null ? hermes.behindCommits : "!"}
@@ -133,22 +134,22 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
             type="button"
             onClick={() => setShutdownOpen(true)}
             disabled={powerLoading}
-            title="Graceful shutdown (requires /usr/local/bin/spark-shutdown on the host)"
+            title={t("Graceful shutdown (requires /usr/local/bin/spark-shutdown on the host)")}
             className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-[11px] text-muted transition-colors hover:bg-danger/20 hover:text-danger disabled:opacity-50"
           >
             <PowerOffIcon className="h-3 w-3" />
-            Shutdown
+            {t("Shutdown")}
           </button>
         ) : (
           <button
             type="button"
             onClick={() => void handleWake()}
             disabled={powerLoading}
-            title="Wake-on-LAN (set MAC address in Edit Spark)"
+            title={t("Wake-on-LAN (set MAC address in Edit Spark)")}
             className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-[11px] text-muted hover:bg-success/20 hover:text-success transition-colors disabled:opacity-50"
           >
             <PowerOnIcon className="h-3 w-3" />
-            Wake
+            {t("Wake")}
           </button>
         )}
         {onEdit && (
@@ -158,7 +159,7 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
             className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-[11px] text-muted hover:bg-surface-hover hover:text-text transition-colors"
           >
             <EditIcon className="h-3 w-3" />
-            Edit
+            {t("Edit")}
           </button>
         )}
       </div>

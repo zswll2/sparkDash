@@ -11,6 +11,7 @@ import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { t, setSavedLanguage, useLanguage } from "./i18n";
 import { GearIcon, BoltIcon } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
@@ -226,6 +227,17 @@ function DashboardApp() {
     }
   }, [settings?.density]);
 
+  // Apply the persisted UI language (see src/i18n). Subscribing here is what makes
+  // the whole tree re-render when Settings switches the language.
+  const language = useLanguage();
+  useEffect(() => {
+    document.documentElement.setAttribute("lang", language === "zh" ? "zh-CN" : "en");
+  }, [language]);
+
+  useEffect(() => {
+    if (settings) setSavedLanguage(settings.language);
+  }, [settings]);
+
   const refreshFromApi = useCallback(async () => {
     try {
       const { sparks: configs } = await fetchSparks();
@@ -313,7 +325,7 @@ function DashboardApp() {
           >
             <BoltIcon className="h-3.5 w-3.5 text-accent" />
             <span>
-              spark<span className="logo-pill-dash">Dash</span>
+              {t("spark")}<span className="logo-pill-dash">{t("Dash")}</span>
             </span>
           </button>
           <SparkTabs
@@ -329,8 +341,8 @@ function DashboardApp() {
               type="button"
               onClick={() => setShowSettings(true)}
               className="icon-circle"
-              title="Settings"
-              aria-label="Settings"
+              title={t("Settings")}
+              aria-label={t("Settings")}
             >
               <GearIcon className="h-4 w-4" />
             </button>
@@ -369,11 +381,11 @@ function DashboardApp() {
               <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
                 <span className="text-lg leading-none">+</span>
               </div>
-              <h2 className="text-sm font-semibold text-text-strong">No Spark registered</h2>
+              <h2 className="text-sm font-semibold text-text-strong">{t("No Spark registered")}</h2>
               <p className="mt-1 text-xs text-muted">
-                Click the&nbsp;
+                {t("Click the")}
                 <span className="rounded border border-border bg-surface-elevated px-1 py-0.5 text-text">+</span>
-                &nbsp;tab to add a DGX Spark unit.
+                {t("tab to add a DGX Spark unit.")}
               </p>
             </div>
           )}
