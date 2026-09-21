@@ -56,11 +56,32 @@ async function startServer(t) {
   return { port: Number(env.PORT) };
 }
 
-async function withTimeout(pending, ms, label) {
-  return Promise.race([
-    pending,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
-  ]);
+/**
+ * Open a socket and wait for its first message. The listener is registered
+ * before the handshake completes, so a snapshot that arrives immediately after
+ * `open` (the normal case) can never be missed — unlike a helper that closes the
+ * socket as soon as it opens.
+ */
+function wsOpenAndWait(url, headers, ms = 10000) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, { headers });
+    const bail = setTimeout(() => {
+      ws.terminate();
+      reject(new Error(`websocket snapshot neither arrived nor rejected within ${ms}ms`));
+    }, ms);
+    ws.on("message", (data) => {
+      clearTimeout(bail);
+      resolve({ ws, data: String(data) });
+    });
+    ws.on("unexpected-response", (_req, res) => {
+      clearTimeout(bail);
+      resolve({ ws: null, status: res.statusCode });
+    });
+    ws.on("error", (err) => {
+      clearTimeout(bail);
+      resolve({ ws: null, message: String(err.message) });
+    });
+  });
 }
 
 async function realSessionCookie(port) {
@@ -106,10 +127,14 @@ test("WebSocket upgrade without a cookie is rejected (401)", async (t) => {
 test("WebSocket upgrade with a valid session cookie and no Origin is accepted and streams a snapshot", async (t) => {
   const { port } = await startServer(t);
   const cookie = await realSessionCookie(port);
-  const outcome = await wsOutcome(`ws://127.0.0.1:${port}/ws`, { cookie });
-  assert.equal(outcome.open, true);
-  const [data] = await withTimeout(once(outcome.ws, "message"), 3000, "snapshot wait");
-  assert.equal(JSON.parse(String(data)).type, "snapshot");
+  const snapshot = await wsOpenAndWait(`ws://127.0.0.1:${port}/ws`, { cookie });
+  t.after(() => snapshot.ws && snapshot.ws.close());
+  assert.notEqual(
+    snapshot.ws,
+    null,
+    `expected an accepted upgrade, got ${snapshot.status ?? snapshot.message}`
+  );
+  assert.equal(JSON.parse(snapshot.data).type, "snapshot");
 });
 
 test("WebSocket upgrade with a session cookie but cross-site Origin is rejected", async (t) => {
