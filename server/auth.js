@@ -139,3 +139,78 @@ export function loadAuthConfig() {
   }
   return record;
 }
+
+// ─── Cookie sessions (T2) ────────────────────────────────────────────────
+// In-memory sessions: restart logs everyone out by design (no JWT persistence).
+
+export const sessionCookieName = () => "sparkdash_session";
+
+const sessions = new Map();
+
+function sessionTtlMs() {
+  const parsed = parseInt(process.env.SESSION_TTL_MS || "43200000", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 43200000;
+}
+
+export function createSession(user, { ip } = {}) {
+  const id = randomBytes(32).toString("hex"); // fresh id per login → no session fixation
+  const now = Date.now();
+  sessions.set(id, { user: String(user), createdAt: now, lastSeen: now, ip: ip || null });
+  return { id, expiresAt: now + sessionTtlMs() };
+}
+
+export function getSession(id) {
+  if (typeof id !== "string" || !id) return null;
+  const session = sessions.get(id);
+  if (!session) return null;
+  if (Date.now() - session.lastSeen > sessionTtlMs()) {
+    sessions.delete(id);
+    return null;
+  }
+  return { user: session.user, createdAt: session.createdAt, lastSeen: session.lastSeen };
+}
+
+export function destroySession(id) {
+  sessions.delete(id);
+}
+
+export function touchSession(id) {
+  const session = sessions.get(id);
+  if (session) session.lastSeen = Date.now();
+}
+
+export function __resetSessionsForTest() {
+  sessions.clear();
+}
+
+// Passive expiry alone never reclaims sessions that are never revisited.
+const sessionSweeper = setInterval(
+  () => {
+    const cutoff = Date.now() - sessionTtlMs();
+    for (const [id, session] of sessions) {
+      if (session.lastSeen < cutoff) sessions.delete(id);
+    }
+  },
+  5 * 60 * 1000
+);
+sessionSweeper.unref();
+
+export function parseCookieHeader(header) {
+  const out = {};
+  if (typeof header !== "string" || !header) return out;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const name = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (name) out[name] = decodeURIComponent(value);
+  }
+  return out;
+}
+
+export function serializeSessionCookie(id, { secure = false, maxAgeSec } = {}) {
+  const parts = [`${sessionCookieName()}=${encodeURIComponent(id)}`, "HttpOnly", "SameSite=Strict", "Path=/"];
+  if (Number.isFinite(maxAgeSec)) parts.push(`Max-Age=${Math.floor(maxAgeSec)}`);
+  if (secure) parts.push("Secure");
+  return parts.join("; ");
+}

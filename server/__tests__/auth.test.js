@@ -4,6 +4,16 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { hashPassword, verifyPassword, loadAuthConfig, authConfigPath } from "../auth.js";
+import {
+  createSession,
+  getSession,
+  destroySession,
+  touchSession,
+  sessionCookieName,
+  parseCookieHeader,
+  serializeSessionCookie,
+  __resetSessionsForTest,
+} from "../auth.js";
 
 function withAuthJson(body, mode) {
   const dir = mkdtempSync(path.join(tmpdir(), "sparkdash-auth-"));
@@ -94,4 +104,68 @@ test("authConfigPath honors SPARKDASH_AUTH_JSON override", () => {
     delete process.env.SPARKDASH_AUTH_JSON;
   }
   assert.match(authConfigPath(), /config[\\/]auth\.json$/);
+});
+
+test("session lifecycle: create → get → destroy → null", () => {
+  __resetSessionsForTest();
+  const { id } = createSession("admin", { ip: "192.168.10.1" });
+  assert.match(id, /^[0-9a-f]{64}$/);
+  assert.equal(getSession(id).user, "admin");
+  destroySession(id);
+  assert.equal(getSession(id), null);
+});
+
+test("expired session (TTL=50ms) returns null and is removed", async () => {
+  __resetSessionsForTest();
+  process.env.SESSION_TTL_MS = "50";
+  try {
+    const { id } = createSession("admin");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(getSession(id), null);
+    assert.equal(getSession(id), null); // stays gone
+  } finally {
+    delete process.env.SESSION_TTL_MS;
+    __resetSessionsForTest();
+  }
+});
+
+test("touchSession keeps a session alive past its original creation", async () => {
+  __resetSessionsForTest();
+  process.env.SESSION_TTL_MS = "60";
+  try {
+    const { id } = createSession("admin");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    touchSession(id);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.notEqual(getSession(id), null); // sliding expiry from lastSeen
+  } finally {
+    delete process.env.SESSION_TTL_MS;
+    __resetSessionsForTest();
+  }
+});
+
+test("sessionCookieName and cookie round-trip", () => {
+  assert.equal(sessionCookieName(), "sparkdash_session");
+  const cookie = serializeSessionCookie("abc123", { secure: false, maxAgeSec: 43200 });
+  assert.ok(cookie.includes("sparkdash_session=abc123"));
+  assert.ok(cookie.includes("HttpOnly"));
+  assert.ok(cookie.includes("SameSite=Strict"));
+  assert.ok(cookie.includes("Path=/"));
+  assert.ok(cookie.includes("Max-Age=43200"));
+  assert.ok(!cookie.includes("Secure"));
+  assert.equal(parseCookieHeader(cookie)[sessionCookieName()], "abc123");
+});
+
+test("serializeSessionCookie adds Secure when secure:true", () => {
+  const cookie = serializeSessionCookie("abc123", { secure: true, maxAgeSec: 60 });
+  assert.ok(cookie.includes("Secure"));
+});
+
+test("parseCookieHeader handles multiple cookies and junk", () => {
+  const parsed = parseCookieHeader("theme=dark; sparkdash_session=tok%2Ben; other=1");
+  assert.equal(parsed.theme, "dark");
+  assert.equal(parsed.sparkdash_session, "tok+en");
+  assert.equal(parsed.other, "1");
+  assert.deepEqual(parseCookieHeader(""), {});
+  assert.deepEqual(parseCookieHeader("garbage"), {});
 });
