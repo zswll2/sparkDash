@@ -56,6 +56,13 @@ async function startServer(t) {
   return { port: Number(env.PORT) };
 }
 
+async function withTimeout(pending, ms, label) {
+  return Promise.race([
+    pending,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+  ]);
+}
+
 async function realSessionCookie(port) {
   const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
     method: "POST",
@@ -67,14 +74,25 @@ async function realSessionCookie(port) {
 }
 
 function wsOutcome(url, headers) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
+    const bail = setTimeout(() => {
+      ws.terminate();
+      reject(new Error("websocket handshake neither opened nor rejected within 5s"));
+    }, 5000);
     ws.on("open", () => {
+      clearTimeout(bail);
       resolve({ open: true, ws });
       ws.close();
     });
-    ws.on("unexpected-response", (_req, res) => resolve({ open: false, status: res.statusCode }));
-    ws.on("error", (err) => resolve({ open: false, message: String(err.message) }));
+    ws.on("unexpected-response", (_req, res) => {
+      clearTimeout(bail);
+      resolve({ open: false, status: res.statusCode });
+    });
+    ws.on("error", (err) => {
+      clearTimeout(bail);
+      resolve({ open: false, message: String(err.message) });
+    });
   });
 }
 
@@ -90,7 +108,7 @@ test("WebSocket upgrade with a valid session cookie and no Origin is accepted an
   const cookie = await realSessionCookie(port);
   const outcome = await wsOutcome(`ws://127.0.0.1:${port}/ws`, { cookie });
   assert.equal(outcome.open, true);
-  const [data] = await once(outcome.ws, "message");
+  const [data] = await withTimeout(once(outcome.ws, "message"), 3000, "snapshot wait");
   assert.equal(JSON.parse(String(data)).type, "snapshot");
 });
 
