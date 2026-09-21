@@ -24,6 +24,7 @@ import {
   destroySession,
   getSession,
   loadAuthConfig,
+  envAccountWarnings,
   originAllowed,
   parseCookieHeader,
   serializeSessionCookie,
@@ -1818,6 +1819,7 @@ function restartBroadcast() {
 loadSettings();
 const startupPreflight = inspectStartupPreflight(BIND_HOST);
 logStartupPreflight(startupPreflight, BIND_HOST, PORT);
+for (const warning of envAccountWarnings()) console.warn(`[sparkDash] ${warning}`);
 
 const tlsProtocol = tlsEnabled() ? "https" : "http";
 const wsProtocol = tlsEnabled() ? "wss" : "ws";

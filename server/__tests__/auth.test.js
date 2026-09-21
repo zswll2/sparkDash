@@ -1,9 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { hashPassword, verifyPassword, loadAuthConfig, authConfigPath } from "../auth.js";
+import {
+  hashPassword,
+  verifyPassword,
+  loadAuthConfig,
+  authConfigPath,
+  passwordHashForEnv,
+  parsePasswordHashEnv,
+  __resetEnvAccountForTest,
+} from "../auth.js";
 import {
   createSession,
   getSession,
@@ -360,4 +368,102 @@ test("originAllowed: missing host with Origin → false; sec-fetch-site same-ori
     true
   );
   assert.equal(originAllowed(fakeReq({ headers: { host: "h:1", origin: "not a url" } })), false);
+});
+
+// ─── env-provided account (T15) ──────────────────────────────────────────
+// config/auth.json wins while it exists; the env vars are the fresh-install path.
+function withEnvAccount({ user, hash, plain, authJsonPath }, fn) {
+  const dir = mkdtempSync(path.join(tmpdir(), "sparkdash-envacc-"));
+  const prev = {
+    SPARKDASH_AUTH_JSON: process.env.SPARKDASH_AUTH_JSON,
+    SPARKDASH_ADMIN_USER: process.env.SPARKDASH_ADMIN_USER,
+    SPARKDASH_ADMIN_PASSWORD_HASH: process.env.SPARKDASH_ADMIN_PASSWORD_HASH,
+    SPARKDASH_ADMIN_PASSWORD: process.env.SPARKDASH_ADMIN_PASSWORD,
+  };
+  process.env.SPARKDASH_AUTH_JSON = authJsonPath ?? path.join(dir, "absent-auth.json");
+  delete process.env.SPARKDASH_ADMIN_USER;
+  delete process.env.SPARKDASH_ADMIN_PASSWORD_HASH;
+  delete process.env.SPARKDASH_ADMIN_PASSWORD;
+  if (user !== undefined) process.env.SPARKDASH_ADMIN_USER = user;
+  if (hash !== undefined) process.env.SPARKDASH_ADMIN_PASSWORD_HASH = hash;
+  if (plain !== undefined) process.env.SPARKDASH_ADMIN_PASSWORD = plain;
+  __resetEnvAccountForTest();
+  try {
+    return fn(dir);
+  } finally {
+    for (const [name, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    __resetEnvAccountForTest();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("SPARKDASH_ADMIN_PASSWORD_HASH supplies the account without any file", () => {
+  withEnvAccount({ user: "zswll2", hash: passwordHashForEnv("env-secret-123") }, (dir) => {
+    const record = loadAuthConfig();
+    assert.equal(record.user, "zswll2");
+    assert.equal(verifyPassword("env-secret-123", record), true);
+    assert.equal(verifyPassword("nope", record), false);
+    assert.equal(existsSync(path.join(dir, "absent-auth.json")), false);
+  });
+});
+
+test("config/auth.json wins over the env account while it exists", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "sparkdash-envwin-"));
+  const file = path.join(dir, "auth.json");
+  const fileRecord = { user: "fileuser", algo: "scrypt", ...hashPassword("file-secret-1"), updatedAt: new Date().toISOString() };
+  writeFileSync(file, JSON.stringify(fileRecord), { mode: 0o600 });
+  chmodSync(file, 0o600);
+  try {
+    withEnvAccount({ user: "envuser", hash: passwordHashForEnv("env-secret-123"), authJsonPath: file }, () => {
+      const record = loadAuthConfig();
+      assert.equal(record.user, "fileuser");
+      assert.equal(verifyPassword("file-secret-1", record), true);
+      assert.equal(verifyPassword("env-secret-123", record), false);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SPARKDASH_ADMIN_PASSWORD seeds config/auth.json once, then still works without it", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "sparkdash-envseed-"));
+  const file = path.join(dir, "auth.json");
+  try {
+    withEnvAccount({ user: "seeduser", plain: "seed-secret-1", authJsonPath: file }, () => {
+      const record = loadAuthConfig();
+      assert.equal(record.user, "seeduser");
+      assert.equal(verifyPassword("seed-secret-1", record), true);
+    });
+    assert.equal(existsSync(file), true, "auth.json should have been seeded");
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    withEnvAccount({ authJsonPath: file }, () => {
+      const record = loadAuthConfig();
+      assert.equal(record.user, "seeduser");
+      assert.equal(verifyPassword("seed-secret-1", record), true);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a malformed SPARKDASH_ADMIN_PASSWORD_HASH throws (fail closed)", () => {
+  withEnvAccount({ hash: "plaintext-is-not-a-hash" }, () => {
+    assert.throws(() => loadAuthConfig(), /SPARKDASH_ADMIN_PASSWORD_HASH/);
+  });
+});
+
+test("no auth.json and no env account -> null (no account configured)", () => {
+  withEnvAccount({}, () => {
+    assert.equal(loadAuthConfig(), null);
+  });
+});
+
+test("passwordHashForEnv round-trips through parsePasswordHashEnv", () => {
+  const spec = passwordHashForEnv("round-trip-1");
+  assert.match(spec, /^scrypt:16384:8:1:[0-9a-f]{64}:[0-9a-f]{128}$/);
+  const record = parsePasswordHashEnv(spec, "admin");
+  assert.equal(verifyPassword("round-trip-1", record), true);
 });

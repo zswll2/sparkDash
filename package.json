@@ -17,6 +17,7 @@
     "i18n:check": "node tools/i18n-shadow-check.mjs",
     "tls:gen": "bash tools/gen-cert.sh",
     "auth:init": "node tools/auth-init.mjs",
+    "auth:hash": "node tools/auth-hash.mjs",
     "preview": "vite preview",
     "start": "node server/index.js",
     "docker:up": "docker compose up -d",

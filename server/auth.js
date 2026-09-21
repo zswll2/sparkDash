@@ -2,6 +2,7 @@ import { timingSafeEqual, scryptSync, randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { atomicWrite } from "./util/atomicWrite.js";
 
 export function configuredToken() {
   const token = process.env.SPARKDASH_TOKEN || process.env.DASHBOARD_TOKEN || "";
@@ -170,7 +171,12 @@ export function verifyPassword(password, record) {
   }
 }
 
-export function loadAuthConfig() {
+/**
+ * Credential record from config/auth.json (mode 0600).
+ * @returns {object|null} null when the file simply does not exist.
+ * @throws on a malformed JSON body or unsafe permissions — never degrade to "no account".
+ */
+export function loadAuthFile() {
   const file = authConfigPath();
   let st;
   try {
@@ -200,6 +206,134 @@ export function loadAuthConfig() {
     throw new Error("config/auth.json is malformed (need string fields: user, salt, hash)");
   }
   return record;
+}
+
+// ─── Account from the environment (T15) ──────────────────────────────────
+// Precedence: config/auth.json wins whenever it exists; the variables below are
+// the fallback so a fresh deployment only needs two lines in .env. The hash form
+// is preferred (nothing reversible on disk); the plaintext form seeds auth.json
+// once and is reported as insecure in the startup log.
+
+const ENV_HASH_ALGO = "scrypt";
+
+/** `scrypt:N:r:p:<salt-hex>:<hash-hex>` — the record fields on one copy-pasteable line. */
+export function passwordHashForEnv(password) {
+  const { salt, hash, N, r, p } = hashPassword(password);
+  return `${ENV_HASH_ALGO}:${N}:${r}:${p}:${salt}:${hash}`;
+}
+
+export function parsePasswordHashEnv(spec, user) {
+  const parts = String(spec || "").trim().split(":");
+  if (parts.length !== 6 || parts[0] !== ENV_HASH_ALGO) {
+    throw new Error(
+      "SPARKDASH_ADMIN_PASSWORD_HASH must look like scrypt:<N>:<r>:<p>:<salt-hex>:<hash-hex> (generate with `npm run auth:hash`)"
+    );
+  }
+  const [, nRaw, rRaw, pRaw, salt, hash] = parts;
+  const N = parseInt(nRaw, 10);
+  const r = parseInt(rRaw, 10);
+  const p = parseInt(pRaw, 10);
+  if (!Number.isFinite(N) || !Number.isFinite(r) || !Number.isFinite(p) || !salt || !hash) {
+    throw new Error("SPARKDASH_ADMIN_PASSWORD_HASH has non-numeric scrypt parameters");
+  }
+  return {
+    user,
+    algo: ENV_HASH_ALGO,
+    N,
+    r,
+    p,
+    keylen: 64,
+    salt,
+    hash,
+    updatedAt: new Date().toISOString(),
+    source: "env-hash",
+  };
+}
+
+/** Env files with a plaintext admin password must not be group/world readable. */
+export function envAccountWarnings() {
+  const warnings = [];
+  const plain = (process.env.SPARKDASH_ADMIN_PASSWORD || "").trim();
+  if (!plain) return warnings;
+  warnings.push(
+    "SPARKDASH_ADMIN_PASSWORD is plaintext in the environment — prefer SPARKDASH_ADMIN_PASSWORD_HASH (`npm run auth:hash`) and delete the plaintext line."
+  );
+  const envFile = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), ".env");
+  try {
+    const mode = statSync(envFile).mode & 0o777;
+    if (mode & 0o077) {
+      warnings.push(
+        `The .env file is ${mode.toString(8).padStart(3, "0")} (want 600) but holds a plaintext admin password: chmod 600 ${envFile}`
+      );
+    }
+  } catch {
+    /* no .env file (variables set some other way) — nothing to check */
+  }
+  return warnings;
+}
+
+let envAccountCache;
+let envSeedReported = false;
+
+export function __resetEnvAccountForTest() {
+  envAccountCache = undefined;
+  envSeedReported = false;
+}
+
+/** Resolve the env-provided account, seeding auth.json once for the plaintext form. */
+export function accountFromEnv() {
+  if (envAccountCache !== undefined) return envAccountCache;
+  const user = (process.env.SPARKDASH_ADMIN_USER || "admin").trim() || "admin";
+  const hashSpec = (process.env.SPARKDASH_ADMIN_PASSWORD_HASH || "").trim();
+  const plain = (process.env.SPARKDASH_ADMIN_PASSWORD || "").trim();
+
+  if (hashSpec) {
+    envAccountCache = parsePasswordHashEnv(hashSpec, user); // malformed spec throws → fail closed
+    return envAccountCache;
+  }
+  if (!plain) {
+    envAccountCache = null;
+    return null;
+  }
+
+  const record = {
+    user,
+    algo: ENV_HASH_ALGO,
+    ...hashPassword(plain),
+    updatedAt: new Date().toISOString(),
+    source: "env-plaintext",
+  };
+  const file = authConfigPath();
+  const persisted = { ...record };
+  delete persisted.source;
+  try {
+    atomicWrite(file, `${JSON.stringify(persisted, null, 2)}\n`, 0o600);
+    if (!envSeedReported) {
+      envSeedReported = true;
+      console.warn(
+        `[auth] created ${file} from SPARKDASH_ADMIN_PASSWORD (plaintext). Switch to SPARKDASH_ADMIN_PASSWORD_HASH and delete that line.`
+      );
+    }
+  } catch (err) {
+    if (!envSeedReported) {
+      envSeedReported = true;
+      console.warn(
+        `[auth] could not persist the env account to ${file} (${err.message}); using the in-memory account for this process only`
+      );
+    }
+  }
+  envAccountCache = record;
+  return record;
+}
+
+/**
+ * The active account: config/auth.json first (it is the durable source of truth),
+ * the environment only while that file does not exist.
+ */
+export function loadAuthConfig() {
+  const fromFile = loadAuthFile();
+  if (fromFile) return fromFile;
+  return accountFromEnv();
 }
 
 // ─── Cookie sessions (T2) ────────────────────────────────────────────────

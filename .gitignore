@@ -32,3 +32,15 @@ HANDOFF.md
 HANDOFF-HERMES.md
 handoff.md
 test/
+
+# ─── secrets / credential material (never commit) ────────────────────────
+# .env variants: keep the template tracked, ignore every real one.
+.env.*
+!.env.example
+config/auth.json*
+config/*.password.txt
+*-password.txt
+*.key
+*.pem
+*.bak
+
