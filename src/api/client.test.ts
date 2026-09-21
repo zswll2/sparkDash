@@ -23,7 +23,8 @@ describe("api client auth handling", () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, { sparks: [] }));
     vi.stubGlobal("fetch", fetchMock);
     await fetchSparks();
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ credentials: "same-origin" });
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])?.[1];
+    expect(init).toMatchObject({ credentials: "same-origin" });
   });
 
   it("login posts credentials and resolves on success", async () => {
