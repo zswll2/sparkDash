@@ -2,16 +2,21 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { SparkSnapshot, WsSnapshot } from "../api/types";
 import { ingestSnapshots } from "./metricsStore";
 import { OVERVIEW_ID } from "../constants";
+import { fetchAuthSession } from "../api/client";
 
-const TOKEN = (typeof localStorage !== "undefined" && localStorage.getItem("sparkdashToken")) || "";
-const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ""}`;
+const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const RECONNECT_DELAY = 2000;
+
+interface UseSnapshotOptions {
+  /** Called when the WS handshake is rejected and the session probe fails. */
+  onAuthRequired?: () => void;
+}
 
 /**
  * useSnapshot — connects to the WebSocket and exposes live spark data.
  * Returns { sparks, activeId, setActiveId, activeSpark, connected }.
  */
-export function useSnapshot() {
+export function useSnapshot({ onAuthRequired }: UseSnapshotOptions = {}) {
   const [sparks, setSparks] = useState<SparkSnapshot[]>([]);
   const [connected, setConnected] = useState(false);
   const [lastValidSnapshotAt, setLastValidSnapshotAt] = useState<number | null>(null);
@@ -73,11 +78,31 @@ export function useSnapshot() {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       setConnected(false);
       wsRef.current = null;
       if (!shouldReconnect.current) return;
-      reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
+      // A rejected handshake surfaces as close 1006 (no close frame), the same
+      // code an abrupt server death produces. Probe the session once instead
+      // of blind-reconnecting every 2s while logged out.
+      if (ev.code === 1000) {
+        reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
+        return;
+      }
+      void (async () => {
+        try {
+          const session = await fetchAuthSession();
+          if (!shouldReconnect.current) return;
+          if (session.authenticated) {
+            // Session is alive — the drop was transient; keep reconnecting.
+            reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
+            return;
+          }
+        } catch {
+          // Session endpoint unreachable — treat as signed out.
+        }
+        onAuthRequired?.();
+      })();
     };
 
     ws.onerror = () => {

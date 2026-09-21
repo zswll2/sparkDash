@@ -359,6 +359,7 @@ export const zhGenerated: Record<string, string> = {
   "Shutting down…": "关机中…",
   "Sign in": "登录",
   "Sign in failed": "登录失败",
+  "Sign out": "退出登录",
   "Signing in…": "登录中…",
   "Skipped": "已跳过",
   "Sleeping": "休眠中",

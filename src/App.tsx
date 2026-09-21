@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppRoute, useRoute } from "./hooks/useRoute";
-import { fetchSparks, reorderSparks, fetchSettings } from "./api/client";
+import { fetchSparks, reorderSparks, fetchSettings, fetchAuthSession, logout } from "./api/client";
+import { LoginPage } from "./components/LoginPage";
 import { SparkTabs } from "./components/SparkTabs";
 import { AddSparkDialog } from "./components/AddSparkDialog";
 import { EditSparkDialog } from "./components/EditSparkDialog";
@@ -12,7 +13,7 @@ import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { t, setSavedLanguage, useLanguage } from "./i18n";
-import { GearIcon, BoltIcon } from "./components/ui/icons";
+import { GearIcon, BoltIcon, LogoutIcon } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
 import { OVERVIEW_ID } from "./constants";
@@ -124,7 +125,7 @@ function placeholderSnapshot(
   };
 }
 
-function DashboardApp() {
+function DashboardApp({ onSignOut }: { onSignOut?: () => void }) {
   const {
     sparks,
     activeId,
@@ -134,7 +135,7 @@ function DashboardApp() {
     lastValidSnapshotAt,
     snapshotError,
     refreshInterval,
-  } = useSnapshot();
+  } = useSnapshot({ onAuthRequired: onSignOut });
   const [telemetryNow, setTelemetryNow] = useState(Date.now());
   const navigate = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);
@@ -337,6 +338,17 @@ function DashboardApp() {
             onReorder={handleReorder}
           />
           <div className="ml-auto flex items-center gap-2.5">
+            {onSignOut && (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="icon-circle"
+                title={t("Sign out")}
+                aria-label={t("Sign out")}
+              >
+                <LogoutIcon className="h-4 w-4" />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowSettings(true)}
@@ -424,12 +436,50 @@ function DashboardApp() {
   );
 }
 
+type AuthGate = "checking" | "authed" | "anonymous";
+
 function App() {
   const route = useAppRoute();
+  const [auth, setAuth] = useState<AuthGate>("checking");
+
+  const checkSession = useCallback(async () => {
+    try {
+      const session = await fetchAuthSession();
+      setAuth(session.authenticated ? "authed" : "anonymous");
+    } catch {
+      setAuth("anonymous");
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkSession();
+  }, [checkSession]);
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      await logout();
+    } catch {
+      // Session is already gone server-side; clearing the gate is still correct.
+    }
+    setAuth("anonymous");
+  }, []);
+
+  if (auth === "checking") {
+    return <div className="min-h-screen" aria-busy="true" data-testid="auth-checking" />;
+  }
+  if (auth === "anonymous") {
+    return <LoginPage onSuccess={() => void checkSession()} />;
+  }
   if (route.mode === "showcase" && route.showcaseSparkId) {
     return <ShowcasePage sparkId={route.showcaseSparkId} />;
   }
-  return <DashboardApp />;
+  return (
+    <DashboardApp
+      onSignOut={() => {
+        void handleSignOut();
+      }}
+    />
+  );
 }
 
 export default App;
