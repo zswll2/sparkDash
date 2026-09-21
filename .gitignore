@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .env
+.env.bak_*
+.omo/
+config/tls/
+config/auth.json
 sparks.json
 config/sparks-secrets.json
 config/.secrets-key
