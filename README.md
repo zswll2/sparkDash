@@ -1,5 +1,7 @@
 # sparkDash ⚡ — Multi-unit monitoring dashboard for NVIDIA DGX Spark
 
+> 中文说明: [README.zh.md](./README.zh.md)
+
 <p align="center">
   <img src="https://img.shields.io/badge/platform-arm64-2d9d78?style=flat-square" alt="Platform: ARM64">
   <img src="https://img.shields.io/badge/React-19-58c4dc?style=flat-square&logo=react" alt="React 19">
@@ -406,6 +408,9 @@ Copy `.env.example` to `.env` if needed:
 |----------|---------|-------------|
 | `BIND_HOST` | `127.0.0.1` | HTTP and WebSocket listen address. A non-loopback bind requires an account (`config/auth.json`) or `SPARKDASH_TOKEN`; otherwise startup fails closed. |
 | `SPARKDASH_TOKEN` | _(empty)_ | Optional Bearer token for scripts; works alongside session login. |
+| `SPARKDASH_ADMIN_USER` | `admin` | Account name used with the env-provided password below. |
+| `SPARKDASH_ADMIN_PASSWORD_HASH` | _(empty)_ | `scrypt:N:r:p:<salt>:<hash>` from `npm run auth:hash`. Used only while `config/auth.json` does not exist. |
+| `SPARKDASH_ADMIN_PASSWORD` | _(empty)_ | Plaintext convenience: seeds `config/auth.json` on first start (delete the line afterwards). |
 | `TLS_ENABLED` | `1` | Serve HTTPS/WSS from `config/tls/server.crt` + `server.key`. `0` is allowed only on a loopback bind. |
 | `TLS_CERT_PATH` / `TLS_KEY_PATH` | `config/tls/server.{crt,key}` | Override the certificate/key paths. |
 | `SPARKDASH_AUTH_JSON` | `config/auth.json` | Account file (scrypt hash, mode `0600`). |
@@ -484,6 +489,7 @@ Choice is stored in `localStorage`.
 - SSH and HTTP probes use short timeouts (about 5 s SSH connect, 3 s HTTP) so a hung host cannot stall the poll loop.
 - Prefer **SSH keys** over passwords. In Docker, mount the private key into `/root/.ssh` (see Quick start); passwords are the only SSH secret the app stores itself.
 - **Application login**: one account in `config/auth.json` (scrypt via `npm run auth:init -- <user>`), in-memory sessions that die with the process, `HttpOnly`/`SameSite=Strict` cookies (`Secure` under TLS), per-IP lockout, uniform `Invalid credentials` errors, and an origin check on every write. Loopback keeps local trust while no account exists; a remote bind with neither account nor token fails closed at startup.
+- **Account from the environment**: a fresh deployment can set `SPARKDASH_ADMIN_USER` + `SPARKDASH_ADMIN_PASSWORD_HASH` (one line from `npm run auth:hash`, nothing reversible on disk) instead of running the interactive setup. The plaintext `SPARKDASH_ADMIN_PASSWORD` seeds `config/auth.json` once and is flagged in the startup log. `config/auth.json` always wins while it exists, so a host keeps its own account.
 - One-off remote benchmark hosts must be listed in `SPARKDASH_BENCH_HOSTS`.
 - Tested operator capacity for this remediation: **12 units**.
 
