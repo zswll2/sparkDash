@@ -18,7 +18,7 @@ import {
   validateDecodeBudget,
   validatePrefillBudget,
 } from "./validate.js";
-import { authorizeUpgrade, configuredToken, createAuthMiddleware, requireRemoteAuth } from "./auth.js";
+import { authorizeUpgrade, createAuthMiddleware } from "./auth.js";
 import {
   createSession,
   destroySession,
@@ -1824,12 +1824,7 @@ if (!startupPreflight.fatal && !tlsFatality) {
   server.listen(PORT, BIND_HOST, () => {
     console.log(`[sparkDash] server listening on ${tlsProtocol}://${BIND_HOST}:${PORT}`);
     console.log(`[sparkDash] WebSocket endpoint ${wsProtocol}://${BIND_HOST}:${PORT}/ws`);
-    const remote = requireRemoteAuth(BIND_HOST);
-    const tokenConfigured = Boolean(configuredToken());
-    console.log(`[sparkDash] bind=${BIND_HOST} auth=${tokenConfigured ? "bearer" : remote ? "required-missing" : "loopback-open"}`);
-    if (remote && !tokenConfigured) {
-      console.warn("[sparkDash] WARNING: remote bind without SPARKDASH_TOKEN — mutations and telemetry will fail closed until a token is set.");
-    }
+    console.log(`[sparkDash] bind=${BIND_HOST} auth=${startupPreflight.authMode}`);
     startAllMonitors();
     fleetEnergyRuntime.start();
   });

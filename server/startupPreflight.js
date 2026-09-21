@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { HOST_PATHS, SPARKS_JSON_PATH } from "./config.js";
-import { allowOpenRemote } from "./auth.js";
+import { loadAuthConfig } from "./auth.js";
+import { tlsEnabled, tlsStartupError } from "./tls.js";
 
 export function isLoopbackHost(host) {
   return host === "localhost" || host === "::1" || /^127\./.test(host || "");
@@ -11,16 +12,14 @@ export function evaluateStartupPreflight(input) {
   const loopback = isLoopbackHost(input.bindHost);
   const errors = [];
   const warnings = [];
-  if (!loopback && !input.tokenConfigured) {
-    if (input.allowOpenRemote) {
-      warnings.push(
-        `Remote bind ${input.bindHost} is open because SPARKDASH_ALLOW_OPEN_REMOTE=1. Set SPARKDASH_TOKEN for authenticated remote access.`
-      );
-    } else {
-      errors.push(
-        `Remote bind ${input.bindHost} requires SPARKDASH_TOKEN. Keep BIND_HOST=127.0.0.1, or set SPARKDASH_TOKEN and use an SSH tunnel, authenticated TLS reverse proxy, or Tailscale Serve.`
-      );
-    }
+  if (input.tlsError) errors.push(input.tlsError);
+  if (input.authFile.state === "broken") {
+    errors.push(`config/auth.json is unusable: ${input.authFile.error}`);
+  }
+  if (!loopback && input.authFile.state !== "ok" && !input.tokenConfigured) {
+    errors.push(
+      `Remote bind ${input.bindHost} has no account and no SPARKDASH_TOKEN. Run: npm run auth:init <user>, keep BIND_HOST=127.0.0.1, or set SPARKDASH_TOKEN.`
+    );
   }
   if (!input.configWritable) errors.push("Config directory is not writable; fix the config volume ownership/permissions.");
   if (!input.secretsKey?.present) warnings.push("No secrets key exists yet; one will be created when the secrets store is first used. Back it up with the config directory.");
@@ -29,9 +28,18 @@ export function evaluateStartupPreflight(input) {
     warnings.push("SSH identity permissions are too open; set the private key to mode 600.");
   }
   if (!input.localCollectors?.available) warnings.push("Local host metrics are unavailable; verify /proc and /sys host mounts.");
+  const authMode =
+    input.authFile.state === "ok"
+      ? "session"
+      : input.tokenConfigured
+        ? "token"
+        : loopback
+          ? "loopback-open"
+          : "unconfigured";
   return {
     fatal: errors.length > 0,
-    authMode: loopback ? "loopback-only" : input.tokenConfigured ? "bearer" : "required-missing",
+    authMode,
+    tls: input.tlsOn,
     errors,
     warnings,
   };
@@ -56,10 +64,18 @@ export function inspectStartupPreflight(bindHost) {
   } catch {
     identityMode = null;
   }
+  let authFile;
+  try {
+    authFile = loadAuthConfig() === null ? { state: "missing" } : { state: "ok" };
+  } catch (err) {
+    authFile = { state: "broken", error: err.message };
+  }
   return evaluateStartupPreflight({
     bindHost,
     tokenConfigured: Boolean(process.env.SPARKDASH_TOKEN || process.env.DASHBOARD_TOKEN),
-    allowOpenRemote: allowOpenRemote(),
+    authFile,
+    tlsOn: tlsEnabled(),
+    tlsError: tlsStartupError(bindHost),
     configWritable: pathWritable(configDir),
     secretsKey: {
       present: Boolean(process.env.SPARKDASH_SECRETS_KEY) || fs.existsSync(keyFile),
@@ -77,7 +93,9 @@ export function inspectStartupPreflight(bindHost) {
 }
 
 export function logStartupPreflight(preflight, bindHost, port) {
-  console.log(`[sparkDash] preflight: bind=${bindHost}:${port} auth=${preflight.authMode}`);
+  console.log(
+    `[sparkDash] preflight: bind=${bindHost}:${port} auth=${preflight.authMode} tls=${preflight.tls ? "on" : "off"}`
+  );
   for (const warning of preflight.warnings) console.warn(`[sparkDash] preflight warning: ${warning}`);
   for (const error of preflight.errors) console.error(`[sparkDash] preflight error: ${error}`);
 }

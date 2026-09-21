@@ -5,38 +5,70 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { evaluateStartupPreflight } from "../../startupPreflight.js";
 
-test("startup preflight permits loopback and fails closed on direct LAN binding", () => {
-  const safe = evaluateStartupPreflight({
+function preflightInput(overrides = {}) {
+  return {
     bindHost: "127.0.0.1",
     configWritable: true,
     secretsKey: { present: true, source: "file" },
     sshIdentity: { configured: false },
     localCollectors: { available: true },
-  });
-  assert.equal(safe.fatal, false);
-  assert.equal(safe.authMode, "loopback-only");
-
-  const exposed = evaluateStartupPreflight({
-    bindHost: "0.0.0.0",
     tokenConfigured: false,
-    configWritable: true,
-    secretsKey: { present: true, source: "file" },
-    sshIdentity: { configured: false },
-    localCollectors: { available: true },
-  });
-  assert.equal(exposed.fatal, true);
-  assert.match(exposed.errors.join(" "), /SPARKDASH_TOKEN|loopback|reverse proxy|Tailscale/i);
+    authFile: { state: "missing" },
+    tlsOn: true,
+    tlsError: null,
+    ...overrides,
+  };
+}
 
-  const authed = evaluateStartupPreflight({
-    bindHost: "0.0.0.0",
-    tokenConfigured: true,
-    configWritable: true,
-    secretsKey: { present: true, source: "file" },
-    sshIdentity: { configured: false },
-    localCollectors: { available: true },
-  });
+test("loopback without account or token stays open for local debugging", () => {
+  const safe = evaluateStartupPreflight(preflightInput());
+  assert.equal(safe.fatal, false);
+  assert.equal(safe.authMode, "loopback-open");
+});
+
+test("remote bind without account or token is fatal (unconfigured)", () => {
+  const exposed = evaluateStartupPreflight(preflightInput({ bindHost: "0.0.0.0" }));
+  assert.equal(exposed.fatal, true);
+  assert.equal(exposed.authMode, "unconfigured");
+  assert.match(exposed.errors.join(" "), /auth\.json|SPARKDASH_TOKEN/);
+});
+
+test("token-configured remote bind reports authMode token", () => {
+  const authed = evaluateStartupPreflight(
+    preflightInput({ bindHost: "0.0.0.0", tokenConfigured: true })
+  );
   assert.equal(authed.fatal, false);
-  assert.equal(authed.authMode, "bearer");
+  assert.equal(authed.authMode, "token");
+});
+
+test("account-configured remote bind reports authMode session and is not fatal", () => {
+  const withAccount = evaluateStartupPreflight(
+    preflightInput({ bindHost: "0.0.0.0", authFile: { state: "ok" } })
+  );
+  assert.equal(withAccount.fatal, false);
+  assert.equal(withAccount.authMode, "session");
+});
+
+test("a broken auth.json is fatal regardless of bind", () => {
+  const broken = evaluateStartupPreflight(
+    preflightInput({ authFile: { state: "broken", error: "not valid JSON" } })
+  );
+  assert.equal(broken.fatal, true);
+  assert.match(broken.errors.join(" "), /auth\.json is unusable/);
+});
+
+test("TLS gate failures are fatal and share the T6 judgment", () => {
+  const tlsFatal = evaluateStartupPreflight(
+    preflightInput({ bindHost: "0.0.0.0", authFile: { state: "ok" }, tlsError: "TLS is enabled but missing — run: npm run tls:gen" })
+  );
+  assert.equal(tlsFatal.fatal, true);
+  assert.match(tlsFatal.errors.join(" "), /tls:gen/);
+});
+
+test("tls=off is reported so the startup log can print tls=off", () => {
+  const off = evaluateStartupPreflight(preflightInput({ tlsOn: false }));
+  assert.equal(off.tls, false);
+  assert.equal(off.fatal, false);
 });
 
 test("Compose files default to loopback and do not hard-code 0.0.0.0", async () => {
