@@ -13,7 +13,60 @@ import {
   parseCookieHeader,
   serializeSessionCookie,
   __resetSessionsForTest,
+  createAuthMiddleware,
+  authorizeUpgrade,
+  originAllowed,
 } from "../auth.js";
+
+// ─── fake req/res harness ─────────────────────────────────────────────────
+function fakeReq({ method = "GET", path = "/api/sparks", headers = {}, remoteAddress = "192.168.10.5" } = {}) {
+  return { method, path, headers, query: {}, socket: { remoteAddress: remoteAddress } };
+}
+
+function fakeRes() {
+  const res = { statusCode: 0, body: null };
+  res.status = (code) => {
+    res.statusCode = code;
+    return res;
+  };
+  res.json = (data) => {
+    res.body = data;
+    return res;
+  };
+  return res;
+}
+
+function runMiddleware(req) {
+  const res = fakeRes();
+  let passed = false;
+  createAuthMiddleware()(req, res, () => {
+    passed = true;
+  });
+  return { passed, res };
+}
+
+function sessionCookieHeader(user = "admin") {
+  const { id } = createSession(user);
+  return { cookie: `${sessionCookieName()}=${id}` };
+}
+
+function useAccountFile(record) {
+  const dir = mkdtempSync(path.join(tmpdir(), "sparkdash-mw-"));
+  const file = path.join(dir, "auth.json");
+  if (record === null) {
+    process.env.SPARKDASH_AUTH_JSON = path.join(dir, "absent.json"); // guaranteed missing
+    return () => {
+      rmSync(dir, { recursive: true, force: true });
+      delete process.env.SPARKDASH_AUTH_JSON;
+    };
+  }
+  writeFileSync(file, JSON.stringify(record));
+  process.env.SPARKDASH_AUTH_JSON = file;
+  return () => {
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.SPARKDASH_AUTH_JSON;
+  };
+}
 
 function withAuthJson(body, mode) {
   const dir = mkdtempSync(path.join(tmpdir(), "sparkdash-auth-"));
@@ -168,4 +221,143 @@ test("parseCookieHeader handles multiple cookies and junk", () => {
   assert.equal(parsed.other, "1");
   assert.deepEqual(parseCookieHeader(""), {});
   assert.deepEqual(parseCookieHeader("garbage"), {});
+});
+
+// ─── middleware (T3) ──────────────────────────────────────────────────────
+const ACCOUNT = { user: "admin", algo: "scrypt", salt: "aa", hash: "bb" };
+
+test("whitelist: GET /api/auth/session, POST /api/auth/login and non-/api GET pass unauthenticated", () => {
+  const cleanup = useAccountFile(ACCOUNT);
+  try {
+    assert.equal(runMiddleware(fakeReq({ path: "/api/auth/session" })).passed, true);
+    assert.equal(runMiddleware(fakeReq({ method: "POST", path: "/api/auth/login" })).passed, true);
+    assert.equal(runMiddleware(fakeReq({ path: "/assets/index-abc123.js" })).passed, true);
+    assert.equal(runMiddleware(fakeReq({ path: "/" })).passed, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("unauthenticated GET /api/sparks → 401 and GET /api/health → 401 (no account, remote source)", () => {
+  const cleanup = useAccountFile(null);
+  try {
+    const sparks = runMiddleware(fakeReq({ path: "/api/sparks" }));
+    assert.equal(sparks.passed, false);
+    assert.equal(sparks.res.statusCode, 401);
+    const health = runMiddleware(fakeReq({ path: "/api/health" }));
+    assert.equal(health.passed, false);
+    assert.equal(health.res.statusCode, 401);
+  } finally {
+    cleanup();
+  }
+});
+
+test("authenticated session write with cross-site Origin → 403 even though session is valid", () => {
+  const cleanup = useAccountFile(ACCOUNT);
+  try {
+    const headers = { ...sessionCookieHeader(), origin: "http://evil.example", host: "192.168.10.100:5555" };
+    const result = runMiddleware(fakeReq({ method: "PUT", path: "/api/settings", headers }));
+    assert.equal(result.passed, false);
+    assert.equal(result.res.statusCode, 403);
+    assert.deepEqual(result.res.body, { error: "Cross-site request rejected" });
+  } finally {
+    cleanup();
+  }
+});
+
+test("authenticated session write with same-origin Origin → allowed", () => {
+  const cleanup = useAccountFile(ACCOUNT);
+  try {
+    const headers = { ...sessionCookieHeader(), origin: "https://192.168.10.100:5555", host: "192.168.10.100:5555" };
+    assert.equal(runMiddleware(fakeReq({ method: "PUT", path: "/api/settings", headers })).passed, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("authenticated session write without Origin and without cross-site hint → allowed", () => {
+  const cleanup = useAccountFile(ACCOUNT);
+  try {
+    const headers = { ...sessionCookieHeader(), host: "192.168.10.100:5555" };
+    assert.equal(runMiddleware(fakeReq({ method: "PUT", path: "/api/settings", headers })).passed, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("write without Origin but Sec-Fetch-Site: cross-site → 403", () => {
+  const cleanup = useAccountFile(ACCOUNT);
+  try {
+    const headers = { ...sessionCookieHeader(), host: "192.168.10.100:5555", "sec-fetch-site": "cross-site" };
+    const result = runMiddleware(fakeReq({ method: "PUT", path: "/api/settings", headers }));
+    assert.equal(result.res.statusCode, 403);
+  } finally {
+    cleanup();
+  }
+});
+
+test("loopback source with no account → local trust; loopback with account → 401", () => {
+  const cleanupNoAccount = useAccountFile(null);
+  try {
+    const req = fakeReq({ path: "/api/sparks", remoteAddress: "127.0.0.1" });
+    assert.equal(runMiddleware(req).passed, true);
+  } finally {
+    cleanupNoAccount();
+  }
+  const cleanupAccount = useAccountFile(ACCOUNT);
+  try {
+    const req = fakeReq({ path: "/api/sparks", remoteAddress: "::1" });
+    const result = runMiddleware(req);
+    assert.equal(result.passed, false);
+    assert.equal(result.res.statusCode, 401);
+  } finally {
+    cleanupAccount();
+  }
+});
+
+test("bearer token still authenticates when SPARKDASH_TOKEN is set", () => {
+  const cleanup = useAccountFile(ACCOUNT);
+  process.env.SPARKDASH_TOKEN = "secret-token";
+  try {
+    const headers = { authorization: "Bearer secret-token", host: "192.168.10.100:5555" };
+    assert.equal(runMiddleware(fakeReq({ method: "PUT", path: "/api/settings", headers })).passed, true);
+    const bad = runMiddleware(
+      fakeReq({ method: "PUT", path: "/api/settings", headers: { authorization: "Bearer nope" } })
+    );
+    assert.equal(bad.res.statusCode, 401);
+  } finally {
+    delete process.env.SPARKDASH_TOKEN;
+    cleanup();
+  }
+});
+
+test("authorizeUpgrade: session + clean origin ok; cross-site origin rejected; bearer ok; loopback no-account ok", () => {
+  const cleanup = useAccountFile(null);
+  process.env.SPARKDASH_TOKEN = "ws-token";
+  try {
+    const okHeaders = { ...sessionCookieHeader(), host: "h:1" };
+    assert.equal(authorizeUpgrade(fakeReq({ path: "/ws", headers: okHeaders })), true);
+    const evilHeaders = { ...sessionCookieHeader(), host: "h:1", origin: "http://evil.example" };
+    assert.equal(authorizeUpgrade(fakeReq({ path: "/ws", headers: evilHeaders })), false);
+    const bearerHeaders = { authorization: "Bearer ws-token" };
+    assert.equal(authorizeUpgrade(fakeReq({ path: "/ws", headers: bearerHeaders })), true);
+    const loopback = fakeReq({ path: "/ws", remoteAddress: "127.0.0.1" });
+    assert.equal(authorizeUpgrade(loopback), true);
+    const remote = fakeReq({ path: "/ws", remoteAddress: "192.168.10.9" });
+    assert.equal(authorizeUpgrade(remote), false);
+  } finally {
+    delete process.env.SPARKDASH_TOKEN;
+    cleanup();
+    __resetSessionsForTest();
+  }
+});
+
+test("originAllowed: missing host with Origin → false; sec-fetch-site same-origin without Origin → true", () => {
+  assert.equal(originAllowed(fakeReq({ headers: { origin: "http://x", host: "" } })), false);
+  assert.equal(originAllowed(fakeReq({ headers: { origin: "http://h:1", host: "h:1" } })), true);
+  assert.equal(
+    originAllowed(fakeReq({ headers: { host: "h:1", "sec-fetch-site": "same-origin" } })),
+    true
+  );
+  assert.equal(originAllowed(fakeReq({ headers: { host: "h:1", origin: "not a url" } })), false);
 });

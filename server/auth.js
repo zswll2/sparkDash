@@ -16,7 +16,7 @@ export function requireRemoteAuth(bindHost) {
   return !isLoopbackBind(bindHost);
 }
 
-/** Unset/empty/"1" allow a tokenless remote bind. Set "0" to fail closed. */
+/** Legacy escape hatch — no longer gates any request; kept only for startup copy. */
 export function allowOpenRemote() {
   const v = process.env.SPARKDASH_ALLOW_OPEN_REMOTE;
   if (v == null || v === "") return true;
@@ -40,35 +40,97 @@ export function extractBearer(req) {
 
 export function authenticate(req) {
   const expected = configuredToken();
-  if (!expected) return { ok: true, mode: "open-loopback" };
   const provided = extractBearer(req);
-  if (!provided || !tokensEqual(provided, expected)) {
+  if (!expected || !provided || !tokensEqual(provided, expected)) {
     return { ok: false, status: 401, error: "Authentication required" };
   }
   return { ok: true, mode: "bearer" };
 }
 
+export function isLoopbackRequest(req) {
+  const addr = req.socket?.remoteAddress || "";
+  return addr === "::1" || addr === "::ffff:127.0.0.1" || /^127\./.test(addr);
+}
+
+/**
+ * CSRF source check for write requests. An explicit Origin must match Host;
+ * no Origin is fine unless Sec-Fetch-Site says cross-site (browsers send one
+ * of the two on cross-site fetches; curl/scripts send neither).
+ */
+export function originAllowed(req) {
+  const origin = typeof req.headers?.origin === "string" ? req.headers.origin : "";
+  const host = typeof req.headers?.host === "string" ? req.headers.host : "";
+  if (origin) {
+    try {
+      return host !== "" && new URL(origin).host === host;
+    } catch {
+      return false;
+    }
+  }
+  return req.headers?.["sec-fetch-site"] !== "cross-site";
+}
+
+function sessionFromRequest(req) {
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  if (!id) return null;
+  const session = getSession(id);
+  return session ? { id, ...session } : null;
+}
+
+function accountConfigured() {
+  try {
+    return loadAuthConfig() !== null;
+  } catch {
+    return true; // broken/insecure auth.json ≠ no account — fail closed
+  }
+}
+
 export function createAuthMiddleware() {
   return function authMiddleware(req, res, next) {
     const method = (req.method || "GET").toUpperCase();
+    const reqPath = req.path || "";
+
+    // 1. Anonymous whitelist — exactly three entries; everything else must auth.
+    if (reqPath === "/api/auth/session" || reqPath === "/api/auth/login") return next();
+    if (method === "GET" && !reqPath.startsWith("/api/")) return next();
+
+    // 2. Cross-site write rejection — before authentication so session-authed
+    //    writes are covered too.
     const mutating = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
-    const remote = requireRemoteAuth(process.env.BIND_HOST || "127.0.0.1");
-    if (!mutating && !remote && !configuredToken()) return next();
-    if (!mutating && !remote) return next();
-    if (!mutating && remote && !configuredToken()) {
-      if (allowOpenRemote()) return next();
-      return res.status(403).json({ error: "Remote access requires SPARKDASH_TOKEN" });
+    if (mutating && !originAllowed(req)) {
+      return res.status(403).json({ error: "Cross-site request rejected" });
     }
-    const result = authenticate(req);
-    if (!result.ok) return res.status(result.status).json({ error: result.error });
-    next();
+
+    // 3. Valid session cookie.
+    const session = sessionFromRequest(req);
+    if (session) {
+      touchSession(session.id);
+      req.authUser = session.user;
+      return next();
+    }
+
+    // 4. Valid Bearer token (script compatibility).
+    const expected = configuredToken();
+    const provided = extractBearer(req);
+    if (expected && provided && tokensEqual(provided, expected)) return next();
+
+    // 5. Loopback local trust only while no account is configured — keeps
+    //    server-side curl debugging working on a fresh install.
+    if (isLoopbackRequest(req) && !accountConfigured()) return next();
+
+    // 6. Denied.
+    return res.status(401).json({ error: "Authentication required" });
   };
 }
 
 export function authorizeUpgrade(req) {
-  const remote = requireRemoteAuth(process.env.BIND_HOST || "127.0.0.1");
-  if (!remote && !configuredToken()) return true;
-  return authenticate(req).ok;
+  const session = sessionFromRequest(req);
+  if (session && originAllowed(req)) return true;
+  const expected = configuredToken();
+  const provided = extractBearer(req);
+  if (expected && provided && tokensEqual(provided, expected)) return true;
+  if (isLoopbackRequest(req) && !accountConfigured()) return true;
+  return false;
 }
 
 // ─── Password hashing + account storage (T1) ─────────────────────────────
