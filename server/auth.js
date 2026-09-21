@@ -1,4 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, scryptSync, randomBytes } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export function configuredToken() {
   const token = process.env.SPARKDASH_TOKEN || process.env.DASHBOARD_TOKEN || "";
@@ -66,4 +69,73 @@ export function authorizeUpgrade(req) {
   const remote = requireRemoteAuth(process.env.BIND_HOST || "127.0.0.1");
   if (!remote && !configuredToken()) return true;
   return authenticate(req).ok;
+}
+
+// ─── Password hashing + account storage (T1) ─────────────────────────────
+// Single-account credential file: config/auth.json (mode 0600, gitignored).
+// Schema: { user, algo:"scrypt", N, r, p, keylen, salt(32hex), hash(128hex), updatedAt }
+
+export function authConfigPath() {
+  if (process.env.SPARKDASH_AUTH_JSON) return process.env.SPARKDASH_AUTH_JSON;
+  const __filename = fileURLToPath(import.meta.url);
+  const ROOT = path.resolve(path.dirname(__filename), "..");
+  return path.join(ROOT, "config", "auth.json");
+}
+
+export function hashPassword(password, salt) {
+  const useSalt = salt || randomBytes(32).toString("hex");
+  const N = 16384;
+  const r = 8;
+  const p = 1;
+  const keylen = 64;
+  const hash = scryptSync(String(password), useSalt, keylen, { N, r, p }).toString("hex");
+  return { salt: useSalt, hash, N, r, p, keylen };
+}
+
+export function verifyPassword(password, record) {
+  try {
+    if (!record || typeof record !== "object") return false;
+    const keylen = record.keylen ?? 64;
+    const N = record.N ?? 16384;
+    const r = record.r ?? 8;
+    const p = record.p ?? 1;
+    const expected = Buffer.from(String(record.hash || ""), "hex");
+    const actual = scryptSync(String(password ?? ""), String(record.salt || ""), keylen, { N, r, p });
+    if (actual.length !== expected.length) return false;
+    return timingSafeEqual(actual, expected);
+  } catch {
+    return false; // malformed record/hex counts as "wrong password", never a crash
+  }
+}
+
+export function loadAuthConfig() {
+  const file = authConfigPath();
+  let st;
+  try {
+    st = statSync(file);
+  } catch (err) {
+    if (err && err.code === "ENOENT") return null; // missing file = no account (distinct from a parse error, which throws)
+    throw err;
+  }
+  const mode = st.mode & 0o777;
+  if (mode & 0o077) {
+    throw new Error(
+      `Refusing auth.json with insecure permissions ${mode.toString(8).padStart(3, "0")} (want 600): ${file}`
+    );
+  }
+  let record;
+  try {
+    record = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    throw new Error(`config/auth.json is unreadable or not valid JSON: ${err.message}`);
+  }
+  if (
+    !record ||
+    typeof record.user !== "string" ||
+    typeof record.salt !== "string" ||
+    typeof record.hash !== "string"
+  ) {
+    throw new Error("config/auth.json is malformed (need string fields: user, salt, hash)");
+  }
+  return record;
 }
