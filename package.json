@@ -15,6 +15,7 @@
     "i18n:extract": "node tools/i18n-extract.mjs",
     "i18n:build": "node tools/i18n-build.mjs",
     "i18n:check": "node tools/i18n-shadow-check.mjs",
+    "tls:gen": "bash tools/gen-cert.sh",
     "preview": "vite preview",
     "start": "node server/index.js",
     "docker:up": "docker compose up -d",

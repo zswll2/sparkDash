@@ -1,5 +1,6 @@
 import express from "express";
 import { createServer } from "http";
+import https from "node:https";
 import { WebSocketServer } from "ws";
 import { spawn } from "child_process";
 import fs from "fs";
@@ -30,6 +31,7 @@ import {
   verifyPassword,
 } from "./auth.js";
 import { inspectHealth } from "./health.js";
+import { tlsEnabled, resolveTlsOptions, tlsStartupError } from "./tls.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
 import {
@@ -320,7 +322,15 @@ const fleetEnergyRuntime = createFleetEnergyRuntime({
 
 // ─── Express app ─────────────────────────────────────────
 const app = express();
-const server = createServer(app);
+// Local dev against the vite proxy needs plain http on loopback:
+//   TLS_ENABLED=0 BIND_HOST=127.0.0.1 npm run dev
+// When the TLS gate below has already failed we still materialize an http
+// server handle so the module graph stays intact; it is never listened on.
+const tlsFatality = tlsStartupError(BIND_HOST);
+const server =
+  !tlsFatality && tlsEnabled()
+    ? https.createServer(resolveTlsOptions(), app)
+    : createServer(app);
 
 app.use(express.json());
 
@@ -1806,11 +1816,14 @@ loadSettings();
 const startupPreflight = inspectStartupPreflight(BIND_HOST);
 logStartupPreflight(startupPreflight, BIND_HOST, PORT);
 
-if (!startupPreflight.fatal) {
+const tlsProtocol = tlsEnabled() ? "https" : "http";
+const wsProtocol = tlsEnabled() ? "wss" : "ws";
+
+if (!startupPreflight.fatal && !tlsFatality) {
   startBroadcast();
   server.listen(PORT, BIND_HOST, () => {
-    console.log(`[sparkDash] server listening on http://${BIND_HOST}:${PORT}`);
-    console.log(`[sparkDash] WebSocket endpoint ws://${BIND_HOST}:${PORT}/ws`);
+    console.log(`[sparkDash] server listening on ${tlsProtocol}://${BIND_HOST}:${PORT}`);
+    console.log(`[sparkDash] WebSocket endpoint ${wsProtocol}://${BIND_HOST}:${PORT}/ws`);
     const remote = requireRemoteAuth(BIND_HOST);
     const tokenConfigured = Boolean(configuredToken());
     console.log(`[sparkDash] bind=${BIND_HOST} auth=${tokenConfigured ? "bearer" : remote ? "required-missing" : "loopback-open"}`);
@@ -1821,6 +1834,7 @@ if (!startupPreflight.fatal) {
     fleetEnergyRuntime.start();
   });
 } else {
+  if (tlsFatality) console.error(`[sparkDash] fatal: ${tlsFatality}`);
   process.exitCode = 1;
 }
 

@@ -26,6 +26,7 @@ async function startServer(t) {
       ...process.env,
       BIND_HOST: "127.0.0.1",
       PORT: String(port),
+      TLS_ENABLED: "0", // loopback dev mode — no certificates in the test env
       SPARKS_JSON_PATH: path.join(tmp, "sparks.json"),
       SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
       SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),
