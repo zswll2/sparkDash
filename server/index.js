@@ -379,7 +379,10 @@ app.post("/api/auth/login", (req, res) => {
     console.error("[auth] auth.json unusable for login:", err.message);
     record = undefined;
   }
-  const { username, password } = req.body || {};
+  // Accept both `user` (plan/API contract) and `username` (login form field name).
+  const body = req.body || {};
+  const username = typeof body.username === "string" ? body.username : body.user;
+  const password = body.password;
   const ok =
     record !== undefined &&
     record !== null &&
