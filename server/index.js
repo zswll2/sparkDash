@@ -18,6 +18,17 @@ import {
   validatePrefillBudget,
 } from "./validate.js";
 import { authorizeUpgrade, configuredToken, createAuthMiddleware, requireRemoteAuth } from "./auth.js";
+import {
+  createSession,
+  destroySession,
+  getSession,
+  loadAuthConfig,
+  originAllowed,
+  parseCookieHeader,
+  serializeSessionCookie,
+  sessionCookieName,
+  verifyPassword,
+} from "./auth.js";
 import { inspectHealth } from "./health.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
@@ -312,6 +323,80 @@ const app = express();
 const server = createServer(app);
 
 app.use(express.json());
+
+// ─── Auth routes (registered before the auth middleware) ─────────────────
+const loginAttempts = new Map();
+
+function loginMaxFails() {
+  const n = parseInt(process.env.LOGIN_MAX_FAILS || "5", 10);
+  return Number.isFinite(n) && n > 0 ? n : 5;
+}
+
+function loginLockMs() {
+  const n = parseInt(process.env.LOGIN_LOCK_MS || "900000", 10);
+  return Number.isFinite(n) && n > 0 ? n : 900000;
+}
+
+function loginLockedFor(ip) {
+  const state = loginAttempts.get(ip);
+  if (!state) return 0;
+  return Math.max(0, state.lockedUntil - Date.now());
+}
+
+export function __resetLoginLimiterForTest() {
+  loginAttempts.clear();
+}
+
+app.get("/api/auth/session", (req, res) => {
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  const session = id ? getSession(id) : null;
+  res.json({ authenticated: !!session, user: session ? session.user : null });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!originAllowed(req)) {
+    return res.status(403).json({ error: "Cross-site request rejected" });
+  }
+  const ip = clientKey(req);
+  if (loginLockedFor(ip) > 0) {
+    // Locked: even the correct password gets 429 (no oracle for lock expiry).
+    return res.status(429).json({ error: "Too many failed attempts; try again later" });
+  }
+  let record;
+  try {
+    record = loadAuthConfig();
+  } catch (err) {
+    console.error("[auth] auth.json unusable for login:", err.message);
+    record = undefined;
+  }
+  const { username, password } = req.body || {};
+  const ok =
+    record !== undefined &&
+    record !== null &&
+    typeof username === "string" &&
+    username === record.user &&
+    verifyPassword(typeof password === "string" ? password : "", record);
+  if (!ok) {
+    const state = loginAttempts.get(ip) || { fails: 0, lockedUntil: 0 };
+    state.fails += 1;
+    if (state.fails >= loginMaxFails()) state.lockedUntil = Date.now() + loginLockMs();
+    loginAttempts.set(ip, state);
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  loginAttempts.delete(ip);
+  const { id, expiresAt } = createSession(record.user, { ip });
+  const maxAgeSec = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
+  res.setHeader("Set-Cookie", serializeSessionCookie(id, { secure: false, maxAgeSec }));
+  res.json({ ok: true, user: record.user });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  if (id) destroySession(id);
+  res.setHeader("Set-Cookie", serializeSessionCookie("", { secure: false, maxAgeSec: 0 }));
+  res.json({ ok: true });
+});
+
 app.use(createAuthMiddleware());
 
 app.get("/api/health", (_req, res) => {
