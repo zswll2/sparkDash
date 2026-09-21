@@ -14,9 +14,14 @@ function withTlsEnv({ enabled, cert = null, key = null } = {}) {
     TLS_KEY_PATH: process.env.TLS_KEY_PATH,
   };
   process.env.TLS_ENABLED = enabled ? "1" : "0";
+  // Always pin the paths: a deployment that has real certificates in config/tls
+  // must not turn the "certificate missing" cases into false passes.
   if (cert !== null || key !== null) {
     process.env.TLS_CERT_PATH = cert === null ? path.join(dir, "absent.crt") : cert;
     process.env.TLS_KEY_PATH = key === null ? path.join(dir, "absent.key") : key;
+  } else {
+    process.env.TLS_CERT_PATH = path.join(dir, "absent.crt");
+    process.env.TLS_KEY_PATH = path.join(dir, "absent.key");
   }
   return {
     dir,
