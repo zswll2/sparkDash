@@ -396,14 +396,14 @@ app.post("/api/auth/login", (req, res) => {
   loginAttempts.delete(ip);
   const { id, expiresAt } = createSession(record.user, { ip });
   const maxAgeSec = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
-  res.setHeader("Set-Cookie", serializeSessionCookie(id, { secure: false, maxAgeSec }));
+  res.setHeader("Set-Cookie", serializeSessionCookie(id, { secure: tlsEnabled(), maxAgeSec }));
   res.json({ ok: true, user: record.user });
 });
 
 app.post("/api/auth/logout", (req, res) => {
   const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
   if (id) destroySession(id);
-  res.setHeader("Set-Cookie", serializeSessionCookie("", { secure: false, maxAgeSec: 0 }));
+  res.setHeader("Set-Cookie", serializeSessionCookie("", { secure: tlsEnabled(), maxAgeSec: 0 }));
   res.json({ ok: true });
 });
 
