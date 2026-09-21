@@ -44,6 +44,10 @@ test("a new WebSocket client receives its initial snapshot without rebroadcastin
       ...process.env,
       BIND_HOST: "127.0.0.1",
       PORT: String(port),
+      TLS_ENABLED: "0", // loopback dev mode — no certificates in the test env
+      // No account file: a deployment account in config/auth.json would otherwise
+      // disable the loopback trust this test relies on.
+      SPARKDASH_AUTH_JSON: path.join(tmp, "absent-auth.json"),
       SPARKS_JSON_PATH: sparksPath,
       SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
       SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),

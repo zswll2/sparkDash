@@ -1,5 +1,6 @@
 import express from "express";
 import { createServer } from "http";
+import https from "node:https";
 import { WebSocketServer } from "ws";
 import { spawn } from "child_process";
 import fs from "fs";
@@ -17,8 +18,20 @@ import {
   validateDecodeBudget,
   validatePrefillBudget,
 } from "./validate.js";
-import { authorizeUpgrade, configuredToken, createAuthMiddleware, requireRemoteAuth } from "./auth.js";
+import { authorizeUpgrade, createAuthMiddleware } from "./auth.js";
+import {
+  createSession,
+  destroySession,
+  getSession,
+  loadAuthConfig,
+  originAllowed,
+  parseCookieHeader,
+  serializeSessionCookie,
+  sessionCookieName,
+  verifyPassword,
+} from "./auth.js";
 import { inspectHealth } from "./health.js";
+import { tlsEnabled, resolveTlsOptions, tlsStartupError } from "./tls.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
 import {
@@ -309,9 +322,94 @@ const fleetEnergyRuntime = createFleetEnergyRuntime({
 
 // ─── Express app ─────────────────────────────────────────
 const app = express();
-const server = createServer(app);
+// Local dev against the vite proxy needs plain http on loopback:
+//   TLS_ENABLED=0 BIND_HOST=127.0.0.1 npm run dev
+// When the TLS gate below has already failed we still materialize an http
+// server handle so the module graph stays intact; it is never listened on.
+const tlsFatality = tlsStartupError(BIND_HOST);
+const server =
+  !tlsFatality && tlsEnabled()
+    ? https.createServer(resolveTlsOptions(), app)
+    : createServer(app);
 
 app.use(express.json());
+
+// ─── Auth routes (registered before the auth middleware) ─────────────────
+const loginAttempts = new Map();
+
+function loginMaxFails() {
+  const n = parseInt(process.env.LOGIN_MAX_FAILS || "5", 10);
+  return Number.isFinite(n) && n > 0 ? n : 5;
+}
+
+function loginLockMs() {
+  const n = parseInt(process.env.LOGIN_LOCK_MS || "900000", 10);
+  return Number.isFinite(n) && n > 0 ? n : 900000;
+}
+
+function loginLockedFor(ip) {
+  const state = loginAttempts.get(ip);
+  if (!state) return 0;
+  return Math.max(0, state.lockedUntil - Date.now());
+}
+
+export function __resetLoginLimiterForTest() {
+  loginAttempts.clear();
+}
+
+app.get("/api/auth/session", (req, res) => {
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  const session = id ? getSession(id) : null;
+  res.json({ authenticated: !!session, user: session ? session.user : null });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!originAllowed(req)) {
+    return res.status(403).json({ error: "Cross-site request rejected" });
+  }
+  const ip = clientKey(req);
+  if (loginLockedFor(ip) > 0) {
+    // Locked: even the correct password gets 429 (no oracle for lock expiry).
+    return res.status(429).json({ error: "Too many failed attempts; try again later" });
+  }
+  let record;
+  try {
+    record = loadAuthConfig();
+  } catch (err) {
+    console.error("[auth] auth.json unusable for login:", err.message);
+    record = undefined;
+  }
+  // Accept both `user` (plan/API contract) and `username` (login form field name).
+  const body = req.body || {};
+  const username = typeof body.username === "string" ? body.username : body.user;
+  const password = body.password;
+  const ok =
+    record !== undefined &&
+    record !== null &&
+    typeof username === "string" &&
+    username === record.user &&
+    verifyPassword(typeof password === "string" ? password : "", record);
+  if (!ok) {
+    const state = loginAttempts.get(ip) || { fails: 0, lockedUntil: 0 };
+    state.fails += 1;
+    if (state.fails >= loginMaxFails()) state.lockedUntil = Date.now() + loginLockMs();
+    loginAttempts.set(ip, state);
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  loginAttempts.delete(ip);
+  const { id, expiresAt } = createSession(record.user, { ip });
+  const maxAgeSec = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
+  res.setHeader("Set-Cookie", serializeSessionCookie(id, { secure: tlsEnabled(), maxAgeSec }));
+  res.json({ ok: true, user: record.user });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  if (id) destroySession(id);
+  res.setHeader("Set-Cookie", serializeSessionCookie("", { secure: tlsEnabled(), maxAgeSec: 0 }));
+  res.json({ ok: true });
+});
+
 app.use(createAuthMiddleware());
 
 app.get("/api/health", (_req, res) => {
@@ -1721,21 +1819,20 @@ loadSettings();
 const startupPreflight = inspectStartupPreflight(BIND_HOST);
 logStartupPreflight(startupPreflight, BIND_HOST, PORT);
 
-if (!startupPreflight.fatal) {
+const tlsProtocol = tlsEnabled() ? "https" : "http";
+const wsProtocol = tlsEnabled() ? "wss" : "ws";
+
+if (!startupPreflight.fatal && !tlsFatality) {
   startBroadcast();
   server.listen(PORT, BIND_HOST, () => {
-    console.log(`[sparkDash] server listening on http://${BIND_HOST}:${PORT}`);
-    console.log(`[sparkDash] WebSocket endpoint ws://${BIND_HOST}:${PORT}/ws`);
-    const remote = requireRemoteAuth(BIND_HOST);
-    const tokenConfigured = Boolean(configuredToken());
-    console.log(`[sparkDash] bind=${BIND_HOST} auth=${tokenConfigured ? "bearer" : remote ? "required-missing" : "loopback-open"}`);
-    if (remote && !tokenConfigured) {
-      console.warn("[sparkDash] WARNING: remote bind without SPARKDASH_TOKEN — mutations and telemetry will fail closed until a token is set.");
-    }
+    console.log(`[sparkDash] server listening on ${tlsProtocol}://${BIND_HOST}:${PORT}`);
+    console.log(`[sparkDash] WebSocket endpoint ${wsProtocol}://${BIND_HOST}:${PORT}/ws`);
+    console.log(`[sparkDash] bind=${BIND_HOST} auth=${startupPreflight.authMode}`);
     startAllMonitors();
     fleetEnergyRuntime.start();
   });
 } else {
+  if (tlsFatality) console.error(`[sparkDash] fatal: ${tlsFatality}`);
   process.exitCode = 1;
 }
 

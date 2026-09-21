@@ -27,6 +27,16 @@ function authHeaders(): Record<string, string> {
 }
 
 // ─── Generic fetch wrapper ────────────────────────────────
+/** Thrown when the server answers 401 — the session gate listens for this. */
+export class AuthRequiredError extends Error {
+  readonly status: number;
+  constructor(status: number, message = "Authentication required") {
+    super(message);
+    this.name = "AuthRequiredError";
+    this.status = status;
+  }
+}
+
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   // Only set Content-Type for requests that actually carry a body. Setting it
   // on GET/DELETE was a no-op but could trigger an unnecessary CORS preflight
@@ -35,13 +45,38 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   if (opts?.body) headers["Content-Type"] = "application/json";
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
+    credentials: "same-origin",
     headers: { ...headers, ...authHeaders(), ...(opts?.headers as Record<string, string> | undefined) },
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 401) {
+      throw new AuthRequiredError(res.status, body.error || "Authentication required");
+    }
     throw new Error(body.error || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// ─── Auth ────────────────────────────────────────────────
+export interface AuthSession {
+  authenticated: boolean;
+  user: string | null;
+}
+
+export function fetchAuthSession(): Promise<AuthSession> {
+  return apiFetch<AuthSession>("/api/auth/session");
+}
+
+export function login(username: string, password: string): Promise<{ ok: boolean; user: string }> {
+  return apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function logout(): Promise<{ ok: boolean }> {
+  return apiFetch("/api/auth/logout", { method: "POST" });
 }
 
 // ─── Sparks CRUD ─────────────────────────────────────────

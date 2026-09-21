@@ -12,7 +12,7 @@ class MockSocket {
   readyState = 0;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(public url: string) {
     MockSocket.instances.push(this);
@@ -24,9 +24,9 @@ class MockSocket {
   emit(data: unknown) {
     this.onmessage?.({ data: typeof data === "string" ? data : JSON.stringify(data) });
   }
-  close() {
+  close(code = 1000) {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
 }
 
