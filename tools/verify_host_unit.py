@@ -84,17 +84,24 @@ def main() -> int:
                 metrics = _json.load(r)
         except Exception as error:  # noqa: BLE001
             print(f"  (无法读取 API: {error})")
-        cpu_temp = ((metrics.get("metrics") or {}).get("cpu") or {}).get("temperature") or 0
-        expected = [("GPU 温度", r"温度\s*\n?\s*\d+", True),
-                    ("显存(VRAM)", r"VRAM", True),
-                    ("内存", r"(RAM|内存|可用)", True),
-                    ("CPU 行", r"CPU", cpu_temp > 0)]
+        m = metrics.get("metrics") or {}
+        has_gpu = m.get("gpu") is not None
+        cpu_temp = (m.get("cpu") or {}).get("temperature") or 0
+        expected = [
+            ("GPU 温度", r"温度\s*\n?\s*\d+", has_gpu),
+            ("显存(VRAM)", r"VRAM", has_gpu),
+            ("内存", r"(RAM|内存|可用)", True),
+            ("CPU 温度", r"°C", cpu_temp > 0),
+        ]
         for label, pattern, required in expected:
             hit = bool(re.search(pattern, body))
-            mark = "✓" if hit else ("✗" if required else "–(本机无 CPU 温度传感器，跳过)")
+            mark = "✓" if hit else ("✗" if required else "–(该单元无此项，跳过)")
             print(f"  {label}: {mark}")
             if required and not hit:
                 problems.append(f"页面缺少 {label}")
+        if not has_gpu and "VRAM" in body:
+            problems.append("无 N 卡的单元却显示了 VRAM 卡片")
+
         page.screenshot(path=SHOT, full_page=True)
         print(f"  截图: {SHOT}")
         browser.close()
