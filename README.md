@@ -370,7 +370,7 @@ sparkDash/
 | PUT | `/api/settings` | Update global settings |
 | WS | `/ws` | Real-time metrics stream |
 
-There is no application authentication on the HTTP/WebSocket API. sparkDash therefore binds to loopback and refuses direct LAN binding. Use an SSH tunnel, authenticated TLS reverse proxy, or Tailscale Serve; see [Remote access](./docs/REMOTE-ACCESS.md).
+Every route except the sign-in page, the static bundle, `GET /api/auth/session` and `POST /api/auth/login` requires an authenticated session. Sign-in uses the single account in `config/auth.json` (scrypt hash; create it with `npm run auth:init -- <user>`) together with an `HttpOnly`/`SameSite=Strict` session cookie, per-IP lockout after repeated failures, and an origin check on writes. Serve HTTPS/WSS with `TLS_ENABLED=1` (default) and a certificate from `npm run tls:gen`, or keep `BIND_HOST=127.0.0.1` and reach it through an SSH tunnel; see [Remote access](./docs/REMOTE-ACCESS.md).
 
 `/api/fleet-energy` samples the configured fleet independently every two seconds. It estimates
 each node as GPU board draw + a CPU utilization model (5.2–65 W) + 23 W of memory/network/base
@@ -404,8 +404,14 @@ Copy `.env.example` to `.env` if needed:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BIND_HOST` | `127.0.0.1` | HTTP and WebSocket listen address. Non-loopback bind requires `SPARKDASH_TOKEN`. |
-| `SPARKDASH_TOKEN` | _(empty)_ | Bearer token required for mutations and remote telemetry when not on loopback. |
+| `BIND_HOST` | `127.0.0.1` | HTTP and WebSocket listen address. A non-loopback bind requires an account (`config/auth.json`) or `SPARKDASH_TOKEN`; otherwise startup fails closed. |
+| `SPARKDASH_TOKEN` | _(empty)_ | Optional Bearer token for scripts; works alongside session login. |
+| `TLS_ENABLED` | `1` | Serve HTTPS/WSS from `config/tls/server.crt` + `server.key`. `0` is allowed only on a loopback bind. |
+| `TLS_CERT_PATH` / `TLS_KEY_PATH` | `config/tls/server.{crt,key}` | Override the certificate/key paths. |
+| `SPARKDASH_AUTH_JSON` | `config/auth.json` | Account file (scrypt hash, mode `0600`). |
+| `SESSION_TTL_MS` | `43200000` | Session lifetime, sliding (12 h). |
+| `LOGIN_MAX_FAILS` | `5` | Failed sign-ins per IP before lockout. |
+| `LOGIN_LOCK_MS` | `900000` | Lockout duration (15 min). |
 | `PORT` | `5555` | HTTP + WebSocket listen port |
 | `LLM_PORT` | `8888` | Default LLM probe port |
 | `COMFY_PORT` | `8188` | Default ComfyUI probe port |
@@ -432,7 +438,7 @@ Copy `.env.example` to `.env` if needed:
 
 > The listener and both Compose files default to `127.0.0.1`. Existing Docker users who opened
 > `http://<host-ip>:5555` must migrate to an SSH tunnel, authenticated reverse proxy, Tailscale
-> Serve, or `BIND_HOST=0.0.0.0 SPARKDASH_TOKEN=...`. Recovery:
+> Serve, application login (`npm run auth:init` + `TLS_ENABLED=1`), or `BIND_HOST=0.0.0.0 SPARKDASH_TOKEN=...`. Recovery:
 > `BIND_HOST=127.0.0.1 docker compose up -d --force-recreate`.
 
 ### Adding a unit
@@ -477,7 +483,7 @@ Choice is stored in `localStorage`.
 - **Target validation** rejects clearly unsafe IPv4 targets (link-local `169.254.0.0/16`, `0.0.0.0/8`, multicast/reserved ≥ 224). Private, loopback, and public addresses are allowed so LAN and remote Sparks work.
 - SSH and HTTP probes use short timeouts (about 5 s SSH connect, 3 s HTTP) so a hung host cannot stall the poll loop.
 - Prefer **SSH keys** over passwords. In Docker, mount the private key into `/root/.ssh` (see Quick start); passwords are the only SSH secret the app stores itself.
-- Loopback installs remain local-trust. Remote bind (`BIND_HOST` not loopback) requires `SPARKDASH_TOKEN` for mutations and WebSocket telemetry and fails closed without it.
+- **Application login**: one account in `config/auth.json` (scrypt via `npm run auth:init -- <user>`), in-memory sessions that die with the process, `HttpOnly`/`SameSite=Strict` cookies (`Secure` under TLS), per-IP lockout, uniform `Invalid credentials` errors, and an origin check on every write. Loopback keeps local trust while no account exists; a remote bind with neither account nor token fails closed at startup.
 - One-off remote benchmark hosts must be listed in `SPARKDASH_BENCH_HOSTS`.
 - Tested operator capacity for this remediation: **12 units**.
 
