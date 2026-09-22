@@ -11,6 +11,9 @@ import {
   passwordHashForEnv,
   parsePasswordHashEnv,
   __resetEnvAccountForTest,
+  clientAddress,
+  trustedProxies,
+  isLoopbackRequest,
 } from "../auth.js";
 import {
   createSession,
@@ -466,4 +469,59 @@ test("passwordHashForEnv round-trips through parsePasswordHashEnv", () => {
   assert.match(spec, /^scrypt:16384:8:1:[0-9a-f]{64}:[0-9a-f]{128}$/);
   const record = parsePasswordHashEnv(spec, "admin");
   assert.equal(verifyPassword("round-trip-1", record), true);
+});
+
+// ─── reverse-proxy client address (T16) ──────────────────────────────────
+function withTrustProxy(value, fn) {
+  const prev = process.env.TRUST_PROXY;
+  if (value === undefined) delete process.env.TRUST_PROXY;
+  else process.env.TRUST_PROXY = value;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prev;
+  }
+}
+
+function proxyReq({ socketAddr = "192.168.1.254", xff } = {}) {
+  return {
+    method: "POST",
+    path: "/api/auth/login",
+    query: {},
+    socket: { remoteAddress: socketAddr },
+    headers: xff ? { "x-forwarded-for": xff } : {},
+  };
+}
+
+test("clientAddress ignores X-Forwarded-For while TRUST_PROXY is unset", () => {
+  withTrustProxy(undefined, () => {
+    assert.equal(clientAddress(proxyReq({ xff: "203.0.113.9" })), "192.168.1.254");
+    assert.deepEqual(trustedProxies(), []);
+  });
+});
+
+test("clientAddress takes the left-most X-Forwarded-For entry from a trusted proxy", () => {
+  withTrustProxy("192.168.1.254", () => {
+    assert.equal(clientAddress(proxyReq({ xff: "203.0.113.9, 10.0.0.1" })), "203.0.113.9");
+    assert.equal(clientAddress(proxyReq({ xff: "::ffff:203.0.113.9" })), "203.0.113.9");
+    assert.equal(clientAddress(proxyReq({})), "192.168.1.254");
+  });
+});
+
+test("clientAddress honours a CIDR entry and rejects peers outside it", () => {
+  withTrustProxy("192.168.1.0/24", () => {
+    assert.equal(clientAddress(proxyReq({ socketAddr: "192.168.1.254", xff: "203.0.113.7" })), "203.0.113.7");
+    assert.equal(clientAddress(proxyReq({ socketAddr: "198.51.100.4", xff: "203.0.113.7" })), "198.51.100.4");
+  });
+});
+
+test("a proxied remote client is not treated as loopback", () => {
+  withTrustProxy("192.168.1.254", () => {
+    assert.equal(isLoopbackRequest(proxyReq({ xff: "203.0.113.9" })), false);
+    assert.equal(isLoopbackRequest(proxyReq({ xff: "127.0.0.1" })), true);
+  });
+  withTrustProxy(undefined, () => {
+    assert.equal(isLoopbackRequest(proxyReq({ socketAddr: "127.0.0.1" })), true);
+  });
 });

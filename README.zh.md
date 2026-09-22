@@ -36,6 +36,7 @@ npm start                      # 或用 systemd:systemctl restart sparkdash
 | `SPARKDASH_ADMIN_PASSWORD_HASH` | 空 | `npm run auth:hash` 输出的 `scrypt:N:r:p:<salt>:<hash>`;仅在 `config/auth.json` 不存在时生效 |
 | `SPARKDASH_ADMIN_PASSWORD` | 空 | 明文便捷方式:首次启动自动种入 `config/auth.json`,之后请删掉该行并改用哈希 |
 | `SPARKDASH_TOKEN` | 空 | 可选 Bearer 令牌,供脚本调用;与登录会话并存 |
+| `TRUST_PROXY` | 空 | 反代/frpc 主机地址(IP 或 CIDR,逗号分隔),允许信任其 `X-Forwarded-For`。**不设则不信任该头**(防伪造),直连部署保持默认 |
 | `SESSION_TTL_MS` | `43200000` | 登录会话有效期(12 小时,滑动续期) |
 | `LOGIN_MAX_FAILS` / `LOGIN_LOCK_MS` | `5` / `900000` | 同一来源连错 5 次锁定 15 分钟 |
 | `SPARKDASH_AUTH_JSON` | `config/auth.json` | 账号文件路径(测试用) |
@@ -102,6 +103,17 @@ cd /www/project/sparkDash && node tools/auth-init.mjs zswll2
 - **不要把 5555 直接暴露到公网** —— 面板带有远程关机、改 SSH 密码等能力。
 
 ---
+
+## 6.5 走反向代理对外开放(可选)
+
+外部入口用 frps + nginx 443 + `*.simin.work` 真实证书,回源到应用的 5555(自签,需 `proxy_ssl_verify off`)。四条硬要求:
+
+1. **隧道端口不要放进 ufw**:frps 的 ufw 默认 DROP,不开端口则公网连不上,但 nginx 走 loopback 可以 —— 应用端口对公网零暴露。
+2. **把该隧道排除出 `frps-scan`**:该 jail 在 frps 上读 `/var/log/frps.log`,**60 秒内同 IP 对任意隧道连接 >3 次即永久封该 IP 全端口**。单页面板正常访问就会踩线,必须在该 jail 的 filter 忽略名单里加上隧道名(如 `SparkDash`)。
+3. **必须设 `TRUST_PROXY=<frpc/nginx 地址>`**:反代后应用看到的来源全变成代理地址,不设会导致「一个人密码猜错 5 次 → 所有人被锁 15 分钟」,日志也失去真实来源。
+4. **加 nginx 层限流**:`limit_req` 对 `/api/auth/login` 单独收紧;应用内限流只按来源 IP 计数,挡不住多 IP 分布式尝试。
+
+安全提醒:这是能关机集群、改各节点 SSH 密码的面板。开放公网前请确认已加 2FA 或 IP 白名单类额外防护(当前版本没有)。
 
 ## 7. 常用命令
 

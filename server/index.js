@@ -25,6 +25,8 @@ import {
   getSession,
   loadAuthConfig,
   envAccountWarnings,
+  clientAddress,
+  trustedProxies,
   originAllowed,
   parseCookieHeader,
   serializeSessionCookie,
@@ -418,7 +420,8 @@ app.get("/api/health", (_req, res) => {
 });
 
 function clientKey(req) {
-  return req.ip || req.socket?.remoteAddress || "unknown";
+  // Real client behind frpc/nginx when TRUST_PROXY names the proxy; otherwise the socket address.
+  return clientAddress(req) || "unknown";
 }
 
 // ─── REST API ────────────────────────────────────────────
@@ -1820,6 +1823,9 @@ loadSettings();
 const startupPreflight = inspectStartupPreflight(BIND_HOST);
 logStartupPreflight(startupPreflight, BIND_HOST, PORT);
 for (const warning of envAccountWarnings()) console.warn(`[sparkDash] ${warning}`);
+if (trustedProxies().length) {
+  console.log(`[sparkDash] TRUST_PROXY=${trustedProxies().join(",")} — X-Forwarded-For honoured from these peers`);
+}
 
 const tlsProtocol = tlsEnabled() ? "https" : "http";
 const wsProtocol = tlsEnabled() ? "wss" : "ws";

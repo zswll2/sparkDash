@@ -48,9 +48,60 @@ export function authenticate(req) {
   return { ok: true, mode: "bearer" };
 }
 
+// ─── Client address behind a reverse proxy (T16) ─────────────────────────
+// TRUST_PROXY lists the peers that may set X-Forwarded-For (the frpc host, nginx).
+// Unset means the header is never trusted, so a direct client cannot forge its
+// address and slip past the login lockout.
+
+function normalizeClientAddress(addr) {
+  const value = String(addr || "");
+  return value.startsWith("::ffff:") ? value.slice(7) : value;
+}
+
+export function trustedProxies() {
+  return String(process.env.TRUST_PROXY || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function addressMatches(addr, entry) {
+  if (!addr || !entry) return false;
+  if (!entry.includes("/")) return addr === entry;
+  const [network, bitsRaw] = entry.split("/");
+  const bits = parseInt(bitsRaw, 10);
+  if (!Number.isFinite(bits) || bits < 0 || bits > 32) return false;
+  const toInt = (ip) => {
+    const parts = String(ip).split(".");
+    if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part))) return null;
+    return parts.reduce((acc, part) => ((acc << 8) | (parseInt(part, 10) & 255)) >>> 0, 0);
+  };
+  const a = toInt(addr);
+  const n = toInt(network);
+  if (a === null || n === null) return false;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (a & mask) === (n & mask);
+}
+
+/**
+ * Address used for rate limiting, logs and the loopback trust check. Behind a
+ * trusted proxy the left-most X-Forwarded-For entry wins; otherwise the socket
+ * address is authoritative.
+ */
+export function clientAddress(req) {
+  const socketAddr = normalizeClientAddress(req.socket?.remoteAddress);
+  const proxies = trustedProxies();
+  if (!proxies.length || !proxies.some((entry) => addressMatches(socketAddr, entry))) return socketAddr;
+  const forwarded = String(req.headers?.["x-forwarded-for"] || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return forwarded.length ? normalizeClientAddress(forwarded[0]) : socketAddr;
+}
+
 export function isLoopbackRequest(req) {
-  const addr = req.socket?.remoteAddress || "";
-  return addr === "::1" || addr === "::ffff:127.0.0.1" || /^127\./.test(addr);
+  const addr = clientAddress(req);
+  return addr === "::1" || addr === "127.0.0.1" || /^127\./.test(addr);
 }
 
 /**
