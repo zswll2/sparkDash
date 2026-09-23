@@ -30,6 +30,14 @@ import {
 } from "../auth.js";
 
 // ─── fake req/res harness ─────────────────────────────────────────────────
+// This suite covers authentication + CSRF on write requests, so it declares the
+// full-control mode a deployment declares. The read-only gate itself (which
+// 403s these writes when no mode file exists) lives in readonly.test.js.
+const readonlyModeDir = mkdtempSync(path.join(tmpdir(), "sparkdash-auth-writes-"));
+const readonlyModeFile = path.join(readonlyModeDir, "readonly.mode");
+writeFileSync(readonlyModeFile, "full\n");
+process.env.SPARKDASH_READONLY_MODE_FILE = readonlyModeFile;
+
 function fakeReq({ method = "GET", path = "/api/sparks", headers = {}, remoteAddress = "192.168.10.5" } = {}) {
   return { method, path, headers, query: {}, socket: { remoteAddress: remoteAddress } };
 }

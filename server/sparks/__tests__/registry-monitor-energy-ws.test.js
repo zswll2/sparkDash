@@ -20,6 +20,10 @@ async function freePort() {
 async function startServer(t) {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "sparkdash-lifecycle-"));
   const port = await freePort();
+  // Registry mutations are state changes: declare full control the way a
+  // deployment does (read-only defaults to on when no mode file exists).
+  const readonlyMode = path.join(tmp, "readonly.mode");
+  await writeFile(readonlyMode, "full\n");
   const child = spawn(process.execPath, ["server/index.js"], {
     cwd: path.resolve(import.meta.dirname, "../../.."),
     env: {
@@ -27,6 +31,7 @@ async function startServer(t) {
       BIND_HOST: "127.0.0.1",
       PORT: String(port),
       TLS_ENABLED: "0", // loopback dev mode — no certificates in the test env
+      SPARKDASH_READONLY_MODE_FILE: readonlyMode,
       // No account file: a deployment account in config/auth.json would otherwise
       // disable the loopback trust this test relies on.
       SPARKDASH_AUTH_JSON: path.join(tmp, "absent-auth.json"),

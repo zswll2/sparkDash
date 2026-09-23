@@ -19,11 +19,16 @@ async function freePort() {
 
 async function startServer(t, { withAccount = true } = {}) {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "sparkdash-authroutes-"));
+  // This suite drives write paths, so it declares the full-control mode the way
+  // a deployment does. Read-only enforcement itself lives in readonly.test.js.
+  const readonlyMode = path.join(tmp, "readonly.mode");
+  await writeFile(readonlyMode, "full\n");
   const env = {
     ...process.env,
     BIND_HOST: "127.0.0.1",
     PORT: String(await freePort()),
     TLS_ENABLED: "0",
+    SPARKDASH_READONLY_MODE_FILE: readonlyMode,
     SPARKS_JSON_PATH: path.join(tmp, "sparks.json"),
     SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
     SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),

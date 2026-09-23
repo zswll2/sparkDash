@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppRoute, useRoute } from "./hooks/useRoute";
-import { fetchSparks, reorderSparks, fetchSettings, fetchAuthSession, logout } from "./api/client";
+import { fetchSparks, reorderSparks, fetchSettings, fetchAuthSession, fetchHealth, logout, setReadonlyState } from "./api/client";
 import { LoginPage } from "./components/LoginPage";
 import { SparkTabs } from "./components/SparkTabs";
 import { AddSparkDialog } from "./components/AddSparkDialog";
@@ -15,6 +15,8 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { t, setSavedLanguage, useLanguage } from "./i18n";
 import { GearIcon, BoltIcon, LogoutIcon } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
+import { ReadOnlyBanner } from "./components/ui/ReadOnlyBanner";
+import { ReadonlyProvider, useReadonly } from "./hooks/useReadonly";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
 import { OVERVIEW_ID } from "./constants";
 import type { Settings, SparkSnapshot } from "./api/types";
@@ -143,6 +145,7 @@ function DashboardApp({ onSignOut }: { onSignOut?: () => void }) {
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const readonly = useReadonly();
   /** Used when WS is down so add/delete still updates the tab bar */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
   const staleAfterMs = Math.max(10_000, 3 * (refreshInterval ?? 2_000));
@@ -368,6 +371,7 @@ function DashboardApp({ onSignOut }: { onSignOut?: () => void }) {
           now={telemetryNow}
           stale={telemetryStale}
         />
+        {readonly ? <ReadOnlyBanner /> : null}
         <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />
         <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
           {isOverview ? (
@@ -441,6 +445,8 @@ type AuthGate = "checking" | "authed" | "anonymous";
 function App() {
   const route = useAppRoute();
   const [auth, setAuth] = useState<AuthGate>("checking");
+  /** Server read-only state — published on every tab so controls agree with the gate. */
+  const [readonly, setReadonly] = useState(false);
 
   const checkSession = useCallback(async () => {
     try {
@@ -454,6 +460,35 @@ function App() {
   useEffect(() => {
     void checkSession();
   }, [checkSession]);
+
+  // Read-only mode lives on the server (config/readonly.mode) and is re-read per
+  // request; the UI mirrors it so buttons are disabled rather than failing. It is
+  // re-checked periodically because an operator may flip it while this tab is open.
+  useEffect(() => {
+    if (auth !== "authed") {
+      setReadonlyState(false);
+      setReadonly(false);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      void fetchHealth()
+        .then((health) => {
+          if (cancelled) return;
+          setReadonly(health.readonly);
+          setReadonlyState(health.readonly);
+        })
+        .catch(() => {
+          // Health unavailable: keep the last known state. The server still decides.
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [auth]);
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -474,11 +509,13 @@ function App() {
     return <ShowcasePage sparkId={route.showcaseSparkId} />;
   }
   return (
-    <DashboardApp
-      onSignOut={() => {
-        void handleSignOut();
-      }}
-    />
+    <ReadonlyProvider value={readonly}>
+      <DashboardApp
+        onSignOut={() => {
+          void handleSignOut();
+        }}
+      />
+    </ReadonlyProvider>
   );
 }
 

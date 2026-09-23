@@ -6,6 +6,7 @@ import { useModalPresence } from "../hooks/useModalPresence";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { ConnectivityResult } from "./ui/ConnectivityResult";
 import { t } from "../i18n";
+import { useReadonly } from "../hooks/useReadonly";
 
 interface AddSparkDialogProps {
   open: boolean;
@@ -35,6 +36,7 @@ const defaultConfig: Omit<SparkConfig, "id"> = {
 };
 
 export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }: AddSparkDialogProps) {
+  const readonly = useReadonly();
   const [config, setConfig] = useState(defaultConfig);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<SparkTestResponse | null>(null);
@@ -284,7 +286,7 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
             <button
               type="button"
               onClick={handleTest}
-              disabled={testing || (!config.isLocal && !config.lanIp)}
+              disabled={testing || readonly || (!config.isLocal && !config.lanIp)}
               className="rounded border border-border bg-surface-elevated px-3 py-1.5 text-xs text-muted hover:bg-surface-hover disabled:opacity-50"
             >
               {testing ? t("Testing...") : t("Test")}
@@ -299,7 +301,7 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || !config.name || (!config.isLocal && !config.lanIp)}
+              disabled={saving || readonly || !config.name || (!config.isLocal && !config.lanIp)}
               className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50"
             >
               {saving ? t("Saving...") : t("Save")}

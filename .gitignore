@@ -44,3 +44,6 @@ config/*.password.txt
 *.pem
 *.bak
 
+
+# 只读模式开关（部署态，不入库）
+config/readonly.mode

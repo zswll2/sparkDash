@@ -18,6 +18,7 @@ import type {
   PrefillBenchListResponse,
   StartPrefillBenchRequest,
 } from "./types";
+import { t } from "../i18n";
 
 const BASE = "";
 const TOKEN = (typeof localStorage !== "undefined" && localStorage.getItem("sparkdashToken")) || "";
@@ -38,6 +39,17 @@ export class AuthRequiredError extends Error {
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  // Read-only mode: refuse state-changing calls before they leave the browser so
+  // the UI reports the real reason instead of a bare 403. The server enforces the
+  // same rule — this is only about the message the operator sees.
+  const method = (opts?.method || "GET").toUpperCase();
+  const clientAllowed =
+    path === "/api/auth/login" || path === "/api/auth/logout" || path.includes("/refresh/");
+  if (readonlyState && method !== "GET" && method !== "HEAD" && !clientAllowed) {
+    throw new Error(
+      t("Read-only mode: this dashboard is view-only. Switch it on the server to operate the fleet.")
+    );
+  }
   // Only set Content-Type for requests that actually carry a body. Setting it
   // on GET/DELETE was a no-op but could trigger an unnecessary CORS preflight
   // (OPTIONS) in some proxy setups.
@@ -64,8 +76,47 @@ export interface AuthSession {
   user: string | null;
 }
 
+/** `/api/health` payload (subset the UI consumes). */
+export interface Health {
+  ok: boolean;
+  bindHost: string;
+  authMode: "session" | "token" | "unconfigured" | "loopback-open";
+  tls: boolean;
+  /** true = the server refuses state-changing requests (public posture). */
+  readonly: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * Last known read-only state, mirrored here so any write attempted from a
+ * component that forgot to disable its control still fails loudly and early
+ * with the real reason instead of a bare HTTP 403. The server remains the
+ * authority — this only improves the message.
+ */
+let readonlyState = false;
+
+export function setReadonlyState(readonly: boolean): void {
+  readonlyState = Boolean(readonly);
+}
+
+export function isReadonlyClient(): boolean {
+  return readonlyState;
+}
+
 export function fetchAuthSession(): Promise<AuthSession> {
   return apiFetch<AuthSession>("/api/auth/session");
+}
+
+/**
+ * Server health — carries the read-only flag. When the dashboard is published
+ * (frp + nginx), the server refuses every state-changing request; the UI reads
+ * this so buttons read as disabled instead of failing one by one.
+ */
+export function fetchHealth(): Promise<Health> {
+  // Never serve this from the HTTP cache: the read-only flag can flip at any
+  // moment, and a stale value leaves enabled-looking controls behind.
+  return apiFetch<Health>("/api/health", { cache: "no-store" });
 }
 
 export function login(username: string, password: string): Promise<{ ok: boolean; user: string }> {

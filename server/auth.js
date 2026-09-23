@@ -137,6 +137,51 @@ function accountConfigured() {
   }
 }
 
+// ─── Read-only mode ──────────────────────────────────────
+/**
+ * Read-only mode: with the dashboard reachable from the internet, the server
+ * refuses every state-changing request except a tiny allowlist — so a leaked
+ * password costs data confidentiality, not the fleet (this panel can power off
+ * machines and rewrite SSH passwords).
+ *
+ * The mode comes from a file that is re-read per request, so an operator can
+ * switch it from a shell without restarting the service:
+ *   "full"                                   → state changes allowed
+ *   anything else, missing, or unreadable    → read-only (fail closed)
+ *
+ * Deliberately NOT exposed over HTTP: a toggle in the UI would let whoever
+ * stole the session switch the protection off.
+ */
+export function readonlyModePath() {
+  if (process.env.SPARKDASH_READONLY_MODE_FILE) return process.env.SPARKDASH_READONLY_MODE_FILE;
+  return path.join(path.dirname(authConfigPath()), "readonly.mode");
+}
+
+/** true = state-changing requests are rejected. Missing/unreadable file ⇒ true. */
+export function isReadonly() {
+  // Escape hatch for local development or an emergency; needs a restart to apply.
+  if (process.env.SPARKDASH_READONLY === "0") return false;
+  try {
+    const raw = readFileSync(readonlyModePath(), "utf-8");
+    return raw.trim().split(/\s+/)[0]?.toLowerCase() !== "full";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Requests that stay allowed in read-only mode: they change no state, and
+ * logging out must keep working. Everything else that is not a plain read is
+ * refused.
+ */
+const READONLY_ALLOWED = ["/api/auth/logout", /^\/api\/sparks\/[^/]+\/refresh\/[^/]+$/];
+
+export function isReadonlyAllowed(reqPath) {
+  return READONLY_ALLOWED.some((entry) =>
+    typeof entry === "string" ? entry === reqPath : entry.test(reqPath)
+  );
+}
+
 export function createAuthMiddleware() {
   return function authMiddleware(req, res, next) {
     const method = (req.method || "GET").toUpperCase();
@@ -153,24 +198,43 @@ export function createAuthMiddleware() {
       return res.status(403).json({ error: "Cross-site request rejected" });
     }
 
-    // 3. Valid session cookie.
+    /**
+     * 3. Read-only gate — the single choke point for every authenticated path
+     *    below (session, bearer token, loopback-without-account). One check here
+     *    can't be forgotten on a route the way a per-route guard could.
+     */
+    const proceed = () => {
+      if (mutating && isReadonly() && !isReadonlyAllowed(reqPath)) {
+        console.warn(
+          `[readonly] blocked ${method} ${reqPath} from ${clientAddress(req) || "unknown"} user=${
+            req.authUser ?? "bearer"
+          }`
+        );
+        return res
+          .status(403)
+          .json({ error: `Read-only mode: ${method} ${reqPath} is disabled` });
+      }
+      return next();
+    };
+
+    // 4. Valid session cookie.
     const session = sessionFromRequest(req);
     if (session) {
       touchSession(session.id);
       req.authUser = session.user;
-      return next();
+      return proceed();
     }
 
-    // 4. Valid Bearer token (script compatibility).
+    // 5. Valid Bearer token (script compatibility).
     const expected = configuredToken();
     const provided = extractBearer(req);
-    if (expected && provided && tokensEqual(provided, expected)) return next();
+    if (expected && provided && tokensEqual(provided, expected)) return proceed();
 
-    // 5. Loopback local trust only while no account is configured — keeps
+    // 6. Loopback local trust only while no account is configured — keeps
     //    server-side curl debugging working on a fresh install.
-    if (isLoopbackRequest(req) && !accountConfigured()) return next();
+    if (isLoopbackRequest(req) && !accountConfigured()) return proceed();
 
-    // 6. Denied.
+    // 7. Denied.
     return res.status(401).json({ error: "Authentication required" });
   };
 }

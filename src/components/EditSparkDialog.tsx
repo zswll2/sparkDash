@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import type { SparkConfig, SparkRole, SparkTestResponse } from "../api/types";
 import { resolveSparkRole } from "../api/sparkRole";
+import { useReadonly } from "../hooks/useReadonly";
 import { useModalPresence } from "../hooks/useModalPresence";
 import { InfoIcon } from "./ui/icons";
 import { ConnectivityResult } from "./ui/ConnectivityResult";
@@ -40,6 +41,7 @@ export function EditSparkDialog({
   onSaved,
   onDeleted,
 }: EditSparkDialogProps) {
+  const readonly = useReadonly();
   const [config, setConfig] = useState<SparkConfig | null>(null);
   /** Snapshot of the Spark config as last fetched from the server. Used to
    *  detect form-vs-saved divergence so Test can target what the user is
@@ -642,7 +644,7 @@ export function EditSparkDialog({
           <button
             type="button"
             onClick={handleDelete}
-            disabled={saving || loading || !config}
+            disabled={saving || readonly || loading || !config}
             className="rounded border border-danger/40 bg-surface-elevated px-3 py-1.5 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
           >
             {saving ? t("Removing…") : t("Remove")}
@@ -651,7 +653,7 @@ export function EditSparkDialog({
             <button
               type="button"
               onClick={handleTest}
-              disabled={testing || loading || (!config?.isLocal && !config?.lanIp) || needsPassword}
+              disabled={testing || readonly || loading || (!config?.isLocal && !config?.lanIp) || needsPassword}
               className="rounded border border-border bg-surface-elevated px-3 py-1.5 text-xs text-muted hover:bg-surface-hover disabled:opacity-50"
             >
               {testing ? t("Testing...") : t("Test")}
@@ -666,7 +668,7 @@ export function EditSparkDialog({
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || loading || !config?.name || (!config?.isLocal && !config?.lanIp) || needsPassword}
+              disabled={saving || readonly || loading || !config?.name || (!config?.isLocal && !config?.lanIp) || needsPassword}
               className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50"
             >
               {saving ? t("Saving...") : t("Save")}

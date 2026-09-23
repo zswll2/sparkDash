@@ -8,6 +8,7 @@ import { FleetEnergyCard } from "./FleetEnergyCard";
 import { FleetAlertStrip } from "./FleetAlertStrip";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { t } from "../../i18n";
+import { useReadonly } from "../../hooks/useReadonly";
 
 interface OverviewPageProps {
   sparks: SparkSnapshot[];
@@ -498,6 +499,7 @@ export function OverviewPage({
   temperatureUnit = "celsius",
   onSelectSpark,
 }: OverviewPageProps) {
+  const readonly = useReadonly();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline" | "issues">("all");
   const withoutWorkers = hideWorkers ? sparks.filter((s) => !isWorkerSpark(s)) : sparks;
@@ -714,7 +716,7 @@ export function OverviewPage({
                 <button
                   type="button"
                   onClick={() => void handleUpdateAllHermes()}
-                  disabled={batchLoading}
+                  disabled={batchLoading || readonly}
                   title={t("Run `hermes update` on every Spark with Hermes Agent enabled")}
                   className={`flex items-center gap-1 rounded-md border bg-surface-elevated px-2.5 py-1.5 text-[11px] transition-colors disabled:opacity-50 ${
                     hermesPendingUpdateCount > 0
@@ -737,7 +739,7 @@ export function OverviewPage({
               <button
                 type="button"
                 onClick={() => void handleWakeAll()}
-                disabled={batchLoading}
+                disabled={batchLoading || readonly}
                 title={t("Wake all Sparks that have a MAC configured (WoL)")}
                 className="flex items-center gap-1 rounded-md border border-border bg-surface-elevated px-2.5 py-1.5 text-[11px] text-muted hover:bg-success/20 hover:text-success transition-colors disabled:opacity-50"
               >
@@ -747,7 +749,7 @@ export function OverviewPage({
               <button
                 type="button"
                 onClick={() => setShutdownOpen(true)}
-                disabled={batchLoading || onlineShutdownCount === 0}
+                disabled={batchLoading || readonly || onlineShutdownCount === 0}
                 title={t("Shut down all online Sparks")}
                 className="flex items-center gap-1 rounded-md border border-border bg-surface-elevated px-2.5 py-1.5 text-[11px] text-muted transition-colors hover:bg-danger/20 hover:text-danger disabled:opacity-50"
               >

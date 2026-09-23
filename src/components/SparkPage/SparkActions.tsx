@@ -5,6 +5,7 @@ import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { openHermesUpdateDialog } from "../../hooks/useHermesUpdateDialog";
 import { EditIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { t } from "../../i18n";
+import { useReadonly } from "../../hooks/useReadonly";
 
 interface SparkActionsProps {
   spark: SparkSnapshot;
@@ -20,6 +21,7 @@ interface SparkActionsProps {
  * power message here keeps the two placements in sync.
  */
 export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
+  const readonly = useReadonly();
   const online = spark.online;
   const [powerLoading, setPowerLoading] = useState(false);
   const [powerMsg, setPowerMsg] = useState<{ text: string; tone: "ok" | "err" } | null>(null);
@@ -99,7 +101,7 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
           <button
             type="button"
             onClick={() => void handleHermesUpdate()}
-            disabled={powerLoading}
+            disabled={powerLoading || readonly}
             title={
               hermes.updateAvailable === true
                 ? `Run "hermes update" on this machine via SSH${
@@ -133,7 +135,7 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
           <button
             type="button"
             onClick={() => setShutdownOpen(true)}
-            disabled={powerLoading}
+            disabled={powerLoading || readonly}
             title={t("Graceful shutdown (requires /usr/local/bin/spark-shutdown on the host)")}
             className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-[11px] text-muted transition-colors hover:bg-danger/20 hover:text-danger disabled:opacity-50"
           >
@@ -144,7 +146,7 @@ export function SparkActions({ spark, onEdit, className }: SparkActionsProps) {
           <button
             type="button"
             onClick={() => void handleWake()}
-            disabled={powerLoading}
+            disabled={powerLoading || readonly}
             title={t("Wake-on-LAN (set MAC address in Edit Spark)")}
             className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-[11px] text-muted hover:bg-success/20 hover:text-success transition-colors disabled:opacity-50"
           >

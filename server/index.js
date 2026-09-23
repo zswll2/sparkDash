@@ -416,6 +416,9 @@ app.post("/api/auth/logout", (req, res) => {
 app.use(createAuthMiddleware());
 
 app.get("/api/health", (_req, res) => {
+  // Read-only state can flip at any moment (config/readonly.mode); a cached 304
+  // would keep the UI showing enabled controls the server refuses.
+  res.set("Cache-Control", "no-store");
   res.json(inspectHealth(process.env.BIND_HOST || "127.0.0.1"));
 });
 

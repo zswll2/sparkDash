@@ -316,6 +316,8 @@ export const zhGenerated: Record<string, string> = {
   "Queue": "队列",
   "Queued": "排队中",
   "RAM": "RAM",
+  "Read-only mode — this dashboard is view-only. Operations are disabled on the server.": "只读模式：面板当前仅可查看，操作已在服务端停用。",
+  "Read-only mode: this dashboard is view-only. Switch it on the server to operate the fleet.": "只读模式：面板当前仅可查看。需要操作请先在服务器上切换。",
   "Refresh": "刷新",
   "Refresh manually using the button above": "使用上方按钮手动刷新",
   "Refresh storage": "刷新存储",

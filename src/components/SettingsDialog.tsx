@@ -3,6 +3,7 @@ import { fetchSettings, updateSettings } from "../api/client";
 import type { Settings } from "../api/types";
 import { useModalPresence } from "../hooks/useModalPresence";
 import { t, setLanguage, revertLanguage } from "../i18n";
+import { useReadonly } from "../hooks/useReadonly";
 import packageJson from "../../package.json";
 
 interface SettingsDialogProps {
@@ -29,6 +30,7 @@ const POLL_PRESETS = [
 ];
 
 export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) {
+  const readonly = useReadonly();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -482,7 +484,7 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !settings || !dirty}
+            disabled={saving || readonly || !settings || !dirty}
             className="min-h-11 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50"
           >
             {saving ? t("Saving...") : t("Save")}

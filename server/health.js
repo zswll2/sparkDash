@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { HOST_PATHS, SPARKS_JSON_PATH } from "./config.js";
-import { configuredToken, loadAuthConfig, requireRemoteAuth } from "./auth.js";
+import { configuredToken, isReadonly, loadAuthConfig, requireRemoteAuth } from "./auth.js";
 import { tlsEnabled, tlsStartupError } from "./tls.js";
 
 export function evaluateHealth({
@@ -13,6 +13,7 @@ export function evaluateHealth({
   tokenConfigured,
   tlsOn,
   tlsError,
+  readonly,
 }) {
   const remote = requireRemoteAuth(bindHost);
   const errors = [];
@@ -29,6 +30,13 @@ export function evaluateHealth({
   if (!configWritable) errors.push("Config directory is not writable");
   if (!secretsKeyPresent) warnings.push("Secrets key is not present yet");
   if (!sshIdentityPresent) warnings.push("SSH identity is not mounted");
+  // A remote bind with full control is one leaked password away from someone
+  // powering off the fleet — read-only mode is the intended public posture.
+  if (remote && !readonly && authFile.state === "ok") {
+    warnings.push(
+      "Remote bind with full control enabled: switch to read-only (config/readonly.mode) unless you intend to operate the fleet from outside the LAN."
+    );
+  }
   const authMode =
     authFile.state === "ok"
       ? "session"
@@ -42,6 +50,8 @@ export function evaluateHealth({
     bindHost,
     authMode,
     tls: tlsOn && !tlsError,
+    /** true = the server refuses state-changing requests (public posture). */
+    readonly: Boolean(readonly),
     errors,
     warnings,
   };
@@ -68,5 +78,6 @@ export function inspectHealth(bindHost) {
     tokenConfigured: Boolean(configuredToken()),
     tlsOn: tlsEnabled(),
     tlsError: tlsStartupError(bindHost),
+    readonly: isReadonly(),
   });
 }
