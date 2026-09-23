@@ -1215,6 +1215,324 @@ export class SystemCollector {
     return 0;
   }
 
+  // ─── Hardware sensors (temperatures + fans) ───────────────
+  /**
+   * Component inventory: CPU / board / NVMe / NIC / iGPU temperatures plus fan
+   * speeds and PWM duty. One dump (one SSH round trip remotely, one pass over
+   * the local hwmon tree) feeds `_parseSensorsDump`, so the local and remote
+   * paths can never disagree about what a line means.
+   *
+   * `sensors` (lm-sensors) is deliberately NOT used: its human output differs
+   * by locale/version and `sensors -j` is not guaranteed to be installed.
+   * sysfs is the stable interface, and every label we need lives next to it.
+   *
+   * Only real hardware hosts are polled (SparkMonitor gates on kind === "host"):
+   * a DGX Spark board has no nct67xx fan tachometers, and a hypervisor guest
+   * has no hwmon tree at all.
+   */
+  async collectSensors(executor = sshExec) {
+    try {
+      const dump = this.spark.isLocal
+        ? this._localSensorsDump()
+        : await executor(this.spark, this._buildSensorsCommand());
+      return this._parseSensorsDump(dump);
+    } catch (err) {
+      console.error(`[SystemCollector] Sensors error for ${this.spark.id}:`, err.message);
+      return { ...this._defaultSensors(), reason: "unreadable" };
+    }
+  }
+
+  /**
+   * One SSH round trip that prints the whole inventory as flat pipe-separated
+   * lines (never JSON — see collectSensors):
+   *
+   *   HWMON|<hwmonDir>|<chip>|<kind>|<device>
+   *   TEMP|<hwmonDir>|<index>|<label>|<millidegrees>
+   *   FAN|<hwmonDir>|<index>|<label>|<rpm>
+   *   PWM|<hwmonDir>|<index>|<0-255>
+   *   DISK|<blockDevice>|<model>
+   *
+   * `kind` is classified here, where the chip name and the netdev namespace are
+   * both in reach; everything else is left to `_parseSensorsDump`.
+   *
+   * @returns {string} remote shell command
+   */
+  _buildSensorsCommand() {
+    return [
+      "for h in /sys/class/hwmon/hwmon*",
+      "do",
+      '  [ -r "$h/name" ] || continue',
+      '  n=$(cat "$h/name" 2>/dev/null)',
+      '  [ -n "$n" ] || continue',
+      "  k=other",
+      '  case "$n" in coretemp|k10temp|zenpower) k=cpu ;; amdgpu|radeon) k=igpu ;; nvme) k=disk ;; nct*|it87*|f718*|w83*|smsc*) k=board ;; *) if [ -e "/sys/class/net/$n" ]; then k=net; fi ;; esac',
+      '  d=$(basename "$(readlink -f "$h/device" 2>/dev/null)" 2>/dev/null)',
+      '  echo "HWMON|$h|$n|$k|$d"',
+      '  for t in "$h"/temp*_input',
+      "  do",
+      '    [ -e "$t" ] || continue',
+      "    b=${t%_input}",
+      '    echo "TEMP|$h|$(basename "$b")|$(cat "$b"_label 2>/dev/null)|$(cat "$t" 2>/dev/null)"',
+      "  done",
+      '  for f in "$h"/fan*_input',
+      "  do",
+      '    [ -e "$f" ] || continue',
+      "    b=${f%_input}",
+      '    echo "FAN|$h|$(basename "$b")|$(cat "$b"_label 2>/dev/null)|$(cat "$f" 2>/dev/null)"',
+      "  done",
+      '  for p in "$h"/pwm[0-9]',
+      "  do",
+      '    [ -e "$p" ] || continue',
+      '    echo "PWM|$h|$(basename "$p")|$(cat "$p" 2>/dev/null)"',
+      "  done",
+      "done",
+      "for s in /sys/block/nvme*",
+      "do",
+      '  [ -e "$s" ] || continue',
+      '  echo "DISK|$(basename "$s")|$(cat "$s/device/model" 2>/dev/null)"',
+      "done",
+    ].join("\n");
+  }
+
+  /**
+   * Same line format as `_buildSensorsCommand()`, read straight from sysfs so a
+   * local unit never shells out on a 2 s loop.
+   *
+   * @returns {string} dump text (empty when the host exposes no hwmon tree)
+   */
+  _localSensorsDump() {
+    const lines = [];
+    const sys = HOST_PATHS.SYS;
+    const readText = (file) => {
+      try {
+        return fs.readFileSync(file, "utf-8").trim();
+      } catch {
+        return "";
+      }
+    };
+
+    let entries = [];
+    try {
+      entries = fs.readdirSync(path.join(sys, "class/hwmon"));
+    } catch {
+      entries = [];
+    }
+
+    for (const entry of entries) {
+      const dir = path.join(sys, "class/hwmon", entry);
+      const name = readText(path.join(dir, "name"));
+      if (!name) continue;
+      let kind = "other";
+      if (/^(coretemp|k10temp|zenpower)$/.test(name)) kind = "cpu";
+      else if (/^(amdgpu|radeon)$/.test(name)) kind = "igpu";
+      else if (name === "nvme") kind = "disk";
+      else if (/^(nct|it87|f718|w83|smsc)/.test(name)) kind = "board";
+      else if (fs.existsSync(path.join(sys, "class/net", name))) kind = "net";
+      let device = "";
+      try {
+        device = path.basename(fs.realpathSync(path.join(dir, "device")));
+      } catch {
+        device = "";
+      }
+      lines.push(`HWMON|${dir}|${name}|${kind}|${device}`);
+
+      let files = [];
+      try {
+        files = fs.readdirSync(dir);
+      } catch {
+        files = [];
+      }
+      for (const file of files) {
+        if (/^temp\d+_input$/.test(file)) {
+          const index = file.replace(/_input$/, "");
+          lines.push(
+            `TEMP|${dir}|${index}|${readText(path.join(dir, `${index}_label`))}|${readText(path.join(dir, file))}`
+          );
+        } else if (/^fan\d+_input$/.test(file)) {
+          const index = file.replace(/_input$/, "");
+          lines.push(
+            `FAN|${dir}|${index}|${readText(path.join(dir, `${index}_label`))}|${readText(path.join(dir, file))}`
+          );
+        } else if (/^pwm\d$/.test(file)) {
+          lines.push(`PWM|${dir}|${file}|${readText(path.join(dir, file))}`);
+        }
+      }
+    }
+
+    let blocks = [];
+    try {
+      blocks = fs.readdirSync(path.join(sys, "block")).filter((b) => b.startsWith("nvme"));
+    } catch {
+      blocks = [];
+    }
+    for (const block of blocks) {
+      lines.push(`DISK|${block}|${readText(path.join(sys, "block", block, "device/model"))}`);
+    }
+
+    return lines.join("\n");
+  }
+
+  /**
+   * Group a dump into what the hardware panel renders.
+   *
+   * Readings that cannot mean anything are dropped rather than shown: a board
+   * exposes floating AUXTIN inputs (one reads -60 °C), PCH internals stuck at
+   * 0 °C, and fan headers with no fan (0 rpm). A wall of zeros and negatives
+   * reads as a broken panel and buries the four values that matter.
+   *
+   * @param {string} raw dump text from `_buildSensorsCommand()` / `_localSensorsDump()`
+   * @returns {object} sensor groups (see `_defaultSensors()`)
+   */
+  _parseSensorsDump(raw) {
+    const result = this._defaultSensors();
+    /** @type {Map<string, { name: string, kind: string, device: string }>} */
+    const chips = new Map();
+    /** @type {Map<string, string>} block device → model */
+    const diskModels = new Map();
+    const temps = [];
+    const fans = [];
+    /** @type {Map<string, number>} `${hwmonDir}|pwmN` → raw 0-255 */
+    const pwms = new Map();
+
+    for (const line of String(raw).split("\n")) {
+      if (!line) continue;
+      const parts = line.trim().split("|");
+      switch (parts[0]) {
+        case "HWMON":
+          chips.set(parts[1], {
+            name: parts[2] || "",
+            kind: parts[3] || "other",
+            device: parts[4] || "",
+          });
+          break;
+        case "TEMP":
+          temps.push({
+            chip: parts[1],
+            index: parts[2] || "",
+            label: (parts[3] || "").trim(),
+            value: this._sensorDegrees(parts[4]),
+          });
+          break;
+        case "FAN":
+          fans.push({
+            chip: parts[1],
+            index: parts[2] || "",
+            label: (parts[3] || "").trim(),
+            rpm: this._sensorInteger(parts[4]),
+          });
+          break;
+        case "PWM":
+          pwms.set(`${parts[1]}|${parts[2]}`, this._sensorInteger(parts[3]));
+          break;
+        case "DISK":
+          diskModels.set(parts[1] || "", (parts[2] || "").trim());
+          break;
+        default:
+          break;
+      }
+    }
+
+    /** NVMe hwmon exposes `nvme0`; the block device (and its model) is `nvme0n1`. */
+    const modelFor = (controller) => {
+      if (!controller) return "";
+      for (const [block, model] of diskModels) {
+        if (block.startsWith(controller)) return model;
+      }
+      return "";
+    };
+
+    /** Chip temp file index (temp12 → 12); unordered names sink to the end. */
+    const tempOrder = (index) => {
+      const match = String(index).match(/^temp(\d+)$/i);
+      return match ? parseInt(match[1], 10) : 999;
+    };
+    // sysfs globs sort lexically (temp1, temp10, temp2 …) — order the rows the
+    // way the chip numbers them, so board rows read SYSTIN / CPUTIN / PECI / …
+    temps.sort((a, b) => tempOrder(a.index) - tempOrder(b.index));
+
+    for (const reading of temps) {
+      const chip = chips.get(reading.chip);
+      if (!chip || !this._isPlausibleTemp(reading.value)) continue;
+      const key = reading.label || reading.index || "temp";
+
+      if (chip.kind === "cpu") {
+        // k10temp's first row is Tctl on most boards, but keep the named
+        // junction reading when a chip exposes several.
+        if (!result.cpu || /^(tctl|tdie|package|tccd)/i.test(reading.label)) {
+          result.cpu = {
+            key,
+            label: reading.label || "CPU",
+            temperature: reading.value,
+          };
+        }
+      } else if (chip.kind === "board") {
+        if (/^AUXTIN/i.test(key)) continue; // floating auxiliary inputs
+        if (/^PCH_/i.test(key)) continue; // chipset internals, not board air
+        result.board.push({ key, label: key, temperature: reading.value });
+      } else if (chip.kind === "disk") {
+        if (!/^temp1$/i.test(reading.index)) continue; // temp1 = Composite
+        const controller = chip.device || reading.chip;
+        result.disks.push({
+          key: controller,
+          label: modelFor(controller) || controller || "NVMe",
+          temperature: reading.value,
+        });
+      } else if (chip.kind === "net") {
+        result.nics.push({
+          key: `${chip.name} ${key}`.trim(),
+          label: key || "PHY",
+          nicName: chip.name,
+          temperature: reading.value,
+        });
+      } else if (chip.kind === "igpu") {
+        if (!result.igpu || /^(edge|junction)/i.test(key)) {
+          result.igpu = { key, label: key || "iGPU", temperature: reading.value };
+        }
+      }
+    }
+
+    for (const fan of fans) {
+      const chip = chips.get(fan.chip);
+      if (!chip || chip.kind !== "board") continue;
+      if (!(fan.rpm > 0)) continue; // header with no fan: 0 rpm is not a fault
+      const index = (fan.index.match(/\d+/) || [""])[0];
+      const duty = pwms.get(`${fan.chip}|pwm${index}`);
+      result.fans.push({
+        key: fan.label || fan.index || "fan",
+        label: fan.label || fan.index || "fan",
+        rpm: fan.rpm,
+        pwmPercent: Number.isFinite(duty) ? Math.round((duty / 255) * 100) : null,
+      });
+    }
+
+    const hasReading =
+      Boolean(result.cpu) ||
+      Boolean(result.igpu) ||
+      result.board.length > 0 ||
+      result.fans.length > 0 ||
+      result.disks.length > 0 ||
+      result.nics.length > 0;
+    result.available = hasReading;
+    result.reason = hasReading ? null : "no-sensors";
+    return result;
+  }
+
+  /** sysfs millidegrees → °C with one decimal (0.1 °C is the sensor's own step). */
+  _sensorDegrees(raw) {
+    const milli = parseInt(String(raw ?? "").trim(), 10);
+    return Number.isFinite(milli) ? Math.round((milli / 1000) * 10) / 10 : Number.NaN;
+  }
+
+  _sensorInteger(raw) {
+    const n = parseInt(String(raw ?? "").trim(), 10);
+    return Number.isFinite(n) ? n : Number.NaN;
+  }
+
+  /** 5-150 °C keeps unconnected thermistors (0 / -60) and garbage out of the panel. */
+  _isPlausibleTemp(value) {
+    return Number.isFinite(value) && value >= 5 && value <= 150;
+  }
+
   async _getRemoteRam() {
     try {
       const cmd = "grep -E 'MemTotal|MemAvailable' /proc/meminfo 2>/dev/null";
@@ -1673,6 +1991,19 @@ export class SystemCollector {
   }
 
   // ─── Default metrics ─────────────────────────────────────
+  _defaultSensors() {
+    return {
+      available: false,
+      /** null | "no-sensors" (nothing readable) | "unreadable" (probe failed) */
+      reason: null,
+      cpu: null,
+      board: [],
+      fans: [],
+      disks: [],
+      nics: [],
+      igpu: null,
+    };
+  }
   _defaultGpu() {
     return {
       temperature: 0,

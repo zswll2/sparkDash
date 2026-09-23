@@ -280,6 +280,49 @@ export interface UnifiedMemoryMetrics {
   };
 }
 
+// ─── Hardware sensors (component temps + fans) ───────────
+/**
+ * One component temperature row. `key` is the chip's own sensor id (stable
+ * across polls, so the UI can pick a specific row); `label` is what the chip
+ * reports, e.g. "SYSTIN" or "Composite".
+ */
+export interface SensorReading {
+  key: string;
+  label: string;
+  /** Degrees Celsius. */
+  temperature: number;
+}
+
+export interface SensorFan {
+  key: string;
+  label: string;
+  rpm: number;
+  /** Fan header duty cycle when the board exposes pwmN; null otherwise. */
+  pwmPercent: number | null;
+}
+
+export interface SensorNicReading extends SensorReading {
+  /** Interface this temperature belongs to (PHY / MAC rows). */
+  nicName: string;
+}
+
+/**
+ * Component sensor inventory for real hardware hosts. Empty (`available:false`)
+ * on units whose hwmon tree is missing — a virtual machine or a board with no
+ * monitoring chip.
+ */
+export interface SensorMetrics {
+  available: boolean;
+  /** Why nothing was collected: "no-sensors" (none present) | "unreadable". */
+  reason: string | null;
+  cpu: SensorReading | null;
+  board: SensorReading[];
+  fans: SensorFan[];
+  disks: SensorReading[];
+  nics: SensorNicReading[];
+  igpu: SensorReading | null;
+}
+
 // ─── LLM metrics ─────────────────────────────────────────
 export interface LlmMetrics {
   available: boolean;
@@ -459,6 +502,11 @@ export interface SparkMetrics {
   storage: StorageMetrics[];
   network: NetworkMetrics | null;
   unifiedMemory: UnifiedMemoryMetrics | null;
+  /**
+   * Component temperatures + fan speeds from the host's monitoring chips.
+   * Present for hardware hosts; absent/empty for Sparks and virtual machines.
+   */
+  sensors?: SensorMetrics | null;
   /** Array of LLM metrics, one per configured port. Empty array when no ports. */
   llm: LlmMetrics[];
   /** ComfyUI probe result when monitoring is enabled; null when off or not yet polled. */

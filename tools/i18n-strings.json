@@ -455,5 +455,19 @@
   "Worker": "Worker",
   "Worker label (cluster / model)": "Worker 标签（集群 / 模型）",
   "Workflow compute footprint": "工作流算力占用",
-  "𝕏 @MiaAI_lab": "𝕏 @MiaAI_lab"
+  "𝕏 @MiaAI_lab": "𝕏 @MiaAI_lab",
+  "Hardware sensors": "硬件 / 传感器",
+  "Temperatures": "温度",
+  "Fans": "风扇",
+  "Fan": "风扇",
+  "rpm": "转/分",
+  "Board": "主板",
+  "Disk": "硬盘",
+  "System": "系统",
+  "CPU socket": "CPU 插座",
+  "Edge": "核心边缘",
+  "Junction": "结温",
+  "Headers without a fan (0 rpm) are hidden.": "未接风扇的接口（0 RPM）已隐藏。",
+  "Sensor chips could not be read (SSH or sysfs error).": "传感器芯片读取失败（SSH 或 sysfs 错误）。",
+  "This machine exposes no hardware sensors (virtual machine or no monitoring chip).": "此机器没有可读的硬件传感器（虚拟机或主板无监控芯片）。"
 }

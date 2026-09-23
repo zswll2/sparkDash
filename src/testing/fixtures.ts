@@ -1,4 +1,4 @@
-import type { SparkSnapshot } from "../api/types";
+import type { SparkSnapshot, SensorMetrics } from "../api/types";
 
 export function makeSpark(id = "spark-1", online = true): SparkSnapshot {
   return {
@@ -49,6 +49,7 @@ export function makeSpark(id = "spark-1", online = true): SparkSnapshot {
       storage: [],
       network: null,
       unifiedMemory: null,
+      sensors: null,
       llm: online ? [{
         available: true,
         backend: "vllm",
@@ -60,4 +61,49 @@ export function makeSpark(id = "spark-1", online = true): SparkSnapshot {
       tailscale: null,
     },
   } as unknown as SparkSnapshot;
+}
+
+/**
+ * Sensor inventory matching the production PVE host (NCT6799 + k10temp + two
+ * NVMe + the 10 GbE NIC + the iGPU), already stripped of unconnected readings
+ * the way the collector serves it.
+ */
+export function makeSensors(): SensorMetrics {
+  return {
+    available: true,
+    reason: null,
+    cpu: { key: "Tctl", label: "Tctl", temperature: 76.3 },
+    board: [
+      { key: "SYSTIN", label: "SYSTIN", temperature: 38 },
+      { key: "CPUTIN", label: "CPUTIN", temperature: 48 },
+      { key: "PECI/TSI Agent 0 Calibration", label: "PECI/TSI Agent 0 Calibration", temperature: 65 },
+      { key: "TSI0_TEMP", label: "TSI0_TEMP", temperature: 76.4 },
+    ],
+    fans: [
+      { key: "fan2", label: "fan2", rpm: 2760, pwmPercent: 70 },
+      { key: "fan3", label: "fan3", rpm: 1293, pwmPercent: 87 },
+    ],
+    disks: [
+      { key: "nvme0", label: "ZHITAI Ti600 1TB", temperature: 38.9 },
+      { key: "nvme1", label: "ZHITAI TiPro9000 2TB", temperature: 44.9 },
+    ],
+    nics: [
+      { key: "enp10s0 PHY Temperature", label: "PHY Temperature", nicName: "enp10s0", temperature: 56 },
+    ],
+    igpu: { key: "edge", label: "edge", temperature: 46 },
+  };
+}
+
+/** A host whose hwmon tree is missing (virtual machine). */
+export function makeEmptySensors(reason = "no-sensors"): SensorMetrics {
+  return {
+    available: false,
+    reason,
+    cpu: null,
+    board: [],
+    fans: [],
+    disks: [],
+    nics: [],
+    igpu: null,
+  };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { SparkSnapshot } from "../../api/types";
+import type { SensorFan, SensorReading, SparkSnapshot } from "../../api/types";
 import { isWorkerSpark, resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
@@ -342,6 +342,70 @@ function SparkCard({
                 );
               }
               return null;
+            })()}
+            {(() => {
+              // Component temperatures from the host's sensor chips (board,
+              // drives, fans) — the same readings the Hardware sensors panel
+              // lists, boiled down to the one row each that matters at a
+              // glance. Absent on Sparks and virtual machines.
+              const sensors = spark.metrics.sensors;
+              if (!sensors?.available) return null;
+              const board =
+                sensors.board.find((reading) => reading.key === "SYSTIN") ??
+                sensors.board[0] ??
+                null;
+              const hottestDisk = sensors.disks.reduce<SensorReading | null>(
+                (hottest, disk) =>
+                  !hottest || disk.temperature > hottest.temperature ? disk : hottest,
+                null
+              );
+              const fastestFan = sensors.fans.reduce<SensorFan | null>(
+                (fastest, fan) => (!fastest || fan.rpm > fastest.rpm ? fan : fastest),
+                null
+              );
+              if (!board && !hottestDisk && !fastestFan) return null;
+              const fmtTemp = (celsius: number) =>
+                temperatureUnit === "fahrenheit"
+                  ? `${celsiusToFahrenheit(celsius)}°F`
+                  : `${celsius}°C`;
+              return (
+                <>
+                  {board && (
+                    <MiniStat
+                      label={t("Board")}
+                      value={fmtTemp(board.temperature)}
+                      title={`${board.label} · ${board.temperature}°C`}
+                      tone={board.temperature >= 100 ? "danger" : board.temperature >= 85 ? "warning" : "default"}
+                    />
+                  )}
+                  {hottestDisk && (
+                    <MiniStat
+                      label={t("Disk")}
+                      value={fmtTemp(hottestDisk.temperature)}
+                      title={`${hottestDisk.label} · ${hottestDisk.temperature}°C`}
+                      tone={
+                        hottestDisk.temperature >= 80
+                          ? "danger"
+                          : hottestDisk.temperature >= 70
+                            ? "warning"
+                            : "default"
+                      }
+                    />
+                  )}
+                  {fastestFan && (
+                    <MiniStat
+                      label={t("Fan")}
+                      value={`${fastestFan.rpm} ${t("rpm")}`}
+                      title={
+                        fastestFan.pwmPercent != null
+                          ? `${fastestFan.label} · ${fastestFan.rpm} rpm · ${fastestFan.pwmPercent}% duty`
+                          : `${fastestFan.label} · ${fastestFan.rpm} rpm`
+                      }
+                      bold={false}
+                    />
+                  )}
+                </>
+              );
             })()}
             {(() => {
               const role = resolveSparkRole(spark);

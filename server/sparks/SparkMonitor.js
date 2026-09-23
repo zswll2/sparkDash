@@ -21,6 +21,7 @@ import {
   POLL_INTERVAL_LIVENESS,
   POLL_INTERVAL_HERMES,
   POLL_INTERVAL_TAILSCALE,
+  POLL_INTERVAL_SENSORS,
   LLM_PORT,
   COMFY_PORT,
   HOST_PATHS,
@@ -102,6 +103,7 @@ export class SparkMonitor {
       storage: [],
       network: this.collector._defaultNetwork(),
       unifiedMemory: this.collector._defaultUnifiedMemory(),
+      sensors: this.collector._defaultSensors(),
       llm: [],
       comfy: null,
       tailscale: null,
@@ -409,6 +411,12 @@ export class SparkMonitor {
     this._intervals.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
     this._intervals.push(setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU));
     this._intervals.push(setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH));
+    // Hardware sensors (board/NVMe/NIC temps + fans) only exist on real
+    // hardware hosts — a DGX Spark board and a hypervisor guest both lack the
+    // chips, so polling them there would spend an SSH login per tick on nothing.
+    if (this.spark.kind === "host") {
+      this._intervals.push(setInterval(() => this._pollDomain("sensors"), POLL_INTERVAL_SENSORS));
+    }
     this._restartLlmPollInterval();
     this._restartComfyPollInterval();
     this._restartHermesPollInterval();
@@ -492,6 +500,7 @@ export class SparkMonitor {
         storage: this._metrics.storage,
         network: this._metrics.network,
         unifiedMemory: this._metrics.unifiedMemory,
+        sensors: this._metrics.sensors,
         llm: this._metrics.llm,
         comfy: comfyOn ? this._metrics.comfy : null,
         tailscale: tailscaleOn ? this._metrics.tailscale : null,
@@ -572,6 +581,7 @@ export class SparkMonitor {
       this._pollDomain("storage"),
       this._pollDomain("ram"),
       this._pollDomain("memory"),
+      this._pollDomain("sensors"),
       this._pollDomain("llm"),
       this._pollDomain("comfy"),
       this._pollDomain("hermes"),
@@ -588,6 +598,8 @@ export class SparkMonitor {
     if (domain === "comfy" && !this._comfyMonitoringEnabled()) return;
     if (domain === "hermes" && !this._hermesMonitoringEnabled()) return;
     if (domain === "tailscale" && !this._tailscaleMonitoringEnabled()) return;
+    // Sensor chips only exist on real hardware hosts (see start()).
+    if (domain === "sensors" && this.spark.kind !== "host") return;
     const runGeneration = this._runGeneration;
     const pollToken = Symbol(domain);
     this._inflight[domain] = pollToken;
@@ -611,6 +623,9 @@ export class SparkMonitor {
           break;
         case "memory":
           result = await this.collector.collectUnifiedMemory();
+          break;
+        case "sensors":
+          result = await this.collector.collectSensors();
           break;
         case "llm":
           // Probe all ports in parallel
@@ -661,6 +676,9 @@ export class SparkMonitor {
           break;
         case "memory":
           this._metrics.unifiedMemory = result;
+          break;
+        case "sensors":
+          this._metrics.sensors = result;
           break;
         case "llm":
           this._metrics.llm = result;

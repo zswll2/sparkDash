@@ -7,6 +7,7 @@ import { SparkActions } from "./SparkActions";
 import { GpuPanel } from "./GpuPanel";
 import { RamPanel } from "./RamPanel";
 import { StoragePanel } from "./StoragePanel";
+import { HardwarePanel } from "./HardwarePanel";
 import { NetworkPanel } from "./NetworkPanel";
 import { TailscalePanel } from "./TailscalePanel";
 import { LlmPanel } from "./LlmPanel";
@@ -283,6 +284,14 @@ export function SparkPage({
                   onStoragePollModeChange={handleStoragePollModeChange}
                 />
                 {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
+                {/* Component temperatures + fan speeds — real hardware hosts only
+                    (the sensor sweep is gated on kind === "host" server-side). */}
+                <HardwarePanel
+                  sensors={metrics.sensors}
+                  sparkId={spark.id}
+                  temperatureUnit={temperatureUnit}
+                  className="md:col-span-2"
+                />
               </>
             ) : (
               /* Resources layout: GPU spans the full left column; Storage + Network [+ Tailnet] stack in the right column */

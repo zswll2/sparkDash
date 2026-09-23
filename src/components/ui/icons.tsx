@@ -204,6 +204,26 @@ export function RotateIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/** Thermometer — hardware sensor / temperature readings. */
+export function ThermometerIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0z" />
+      <line x1="12" y1="9" x2="12" y2="15" />
+    </svg>
+  );
+}
+
+/** Fan — fan speed readings. */
+export function FanIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 10c-1.5-2-1-5 .5-6.5 1.5-1.5 4-1 5 1 1 2 0 4-1.5 5M14 12c2-1.5 5-1 6.5.5 1.5 1.5 1 4-1 5-2 1-4 0-5-1.5M12 14c1.5 2 1 5-.5 6.5-1.5 1.5-4 1-5-1-1-2 0-4 1.5-5M10 12c-2 1.5-5 1-6.5-.5-1.5-1.5-1-4 1-5 2-1 4 0 5 1.5" />
+    </svg>
+  );
+}
+
 /** Power symbol — used for graceful shutdown. */
 export function PowerOffIcon({ className = "" }: { className?: string }) {
   return (
