@@ -13,6 +13,8 @@ import path from "path";
 import {
   COMFY_PORT,
   COMFY_PROBE_TIMEOUT_MS,
+  LLM_PORT_SCAN_END,
+  LLM_PORT_SCAN_START,
   SSH_CONNECT_TIMEOUT,
   SSH_CONTROL_PERSIST,
   SSH_MULTIPLEX,
@@ -29,8 +31,13 @@ const _controlSalt = crypto.randomBytes(32);
 fs.chmodSync(_controlDir, 0o700);
 
 function controlPersistSeconds() {
-  const configured = Number.parseInt(process.env.SSH_CONTROL_PERSIST_SECONDS ?? "60", 10);
-  return Number.isFinite(configured) ? Math.min(3600, Math.max(0, configured)) : 60;
+  const configured = Number.parseInt(
+    process.env.SSH_CONTROL_PERSIST_SECONDS ?? "60",
+    10,
+  );
+  return Number.isFinite(configured)
+    ? Math.min(3600, Math.max(0, configured))
+    : 60;
 }
 
 function ensureControlDir() {
@@ -49,7 +56,14 @@ export function sshMultiplexConfig(spark, targetHost, user, auth, password) {
 
   ensureControlDir();
   const identityFile = process.env.SSH_IDENTITY_FILE || "default";
-  const isolationKey = [spark.id, user, targetHost, auth || "key", identityFile, password || ""].join("\0");
+  const isolationKey = [
+    spark.id,
+    user,
+    targetHost,
+    auth || "key",
+    identityFile,
+    password || "",
+  ].join("\0");
   const digest = crypto
     .createHash("sha256")
     .update(_controlSalt)
@@ -92,7 +106,8 @@ export async function ensureMultiplexReady(config, establish) {
   try {
     await state.ready;
   } catch (err) {
-    if (_multiplexStates.get(config.key) === state) _multiplexStates.delete(config.key);
+    if (_multiplexStates.get(config.key) === state)
+      _multiplexStates.delete(config.key);
     throw err;
   }
 }
@@ -176,7 +191,8 @@ function sshpassAvailable() {
  * @returns {string[]}
  */
 function multiplexOpts({ targetHost, user }) {
-  if (!SSH_MULTIPLEX) return ["-o", "ControlMaster=no", "-o", "ControlPath=none"];
+  if (!SSH_MULTIPLEX)
+    return ["-o", "ControlMaster=no", "-o", "ControlPath=none"];
   const localHost = os.hostname();
   const hash = crypto
     .createHash("sha1")
@@ -211,13 +227,17 @@ function multiplexOpts({ targetHost, user }) {
  * @returns {{ file: string, args: string[], env: NodeJS.ProcessEnv, targetHost: string }}
  */
 export function sshCommandSpec(spark, opts = {}) {
-  const extraSshArgs = Array.isArray(opts.extraSshArgs) ? opts.extraSshArgs : [];
+  const extraSshArgs = Array.isArray(opts.extraSshArgs)
+    ? opts.extraSshArgs
+    : [];
   const remoteArgv = Array.isArray(opts.remoteArgv) ? opts.remoteArgv : [];
   const { host, user, auth, password } = spark?.ssh || {};
   const targetHost = host || spark?.lanIp;
 
   if (!targetHost || !user) {
-    throw new Error(`SSH config missing for ${spark?.id}: host=${targetHost}, user=${user}`);
+    throw new Error(
+      `SSH config missing for ${spark?.id}: host=${targetHost}, user=${user}`,
+    );
   }
 
   if (!isAllowedTargetHost(targetHost)) {
@@ -261,22 +281,28 @@ export function sshCommandSpec(spark, opts = {}) {
   // known_hosts mixing), TERM, and SSH_AUTH_SOCK so agent-forwarded key auth
   // still works. SSHPASS is added below only for password auth.
   const env = {
-    PATH: process.env.PATH || "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    PATH:
+      process.env.PATH ||
+      "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     HOME: process.env.HOME || "/root",
     USER: process.env.USER,
     LOGNAME: process.env.LOGNAME,
     TERM: process.env.TERM || "xterm",
-    ...(process.env.SSH_AUTH_SOCK ? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK } : {}),
+    ...(process.env.SSH_AUTH_SOCK
+      ? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK }
+      : {}),
   };
 
   if (auth === "pass") {
     if (!password) {
       throw new Error(
-        `SSH password auth selected for ${spark.id} but no password is set (Edit Spark once — passwords are stored encrypted and survive restarts)`
+        `SSH password auth selected for ${spark.id} but no password is set (Edit Spark once — passwords are stored encrypted and survive restarts)`,
       );
     }
     if (!sshpassAvailable()) {
-      throw new Error(`sshpass is not installed. Install it with: sudo apt-get install sshpass`);
+      throw new Error(
+        `sshpass is not installed. Install it with: sudo apt-get install sshpass`,
+      );
     }
     // Password via env (sshpass -e) — never on argv or in process list as -p
     env.SSHPASS = password;
@@ -315,7 +341,9 @@ export function sshCommandSpec(spark, opts = {}) {
  */
 export async function sshExec(spark, cmd, options = {}) {
   const timeoutMs =
-    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 10000;
+    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : 10000;
 
   if (typeof cmd !== "string" || !cmd) {
     throw new Error("SSH command must be a non-empty string");
@@ -327,14 +355,19 @@ export async function sshExec(spark, cmd, options = {}) {
 
   const execute = (execArgs) =>
     new Promise((resolve, reject) => {
-      execFile(file, execArgs, { timeout: timeoutMs, env, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err) {
-          const msg = stderr?.trim() || err.message;
-          reject(new Error(`SSH to ${targetHost} failed: ${msg}`));
-        } else {
-          resolve(String(stdout).trim());
-        }
-      });
+      execFile(
+        file,
+        execArgs,
+        { timeout: timeoutMs, env, maxBuffer: 10 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          if (err) {
+            const msg = stderr?.trim() || err.message;
+            reject(new Error(`SSH to ${targetHost} failed: ${msg}`));
+          } else {
+            resolve(String(stdout).trim());
+          }
+        },
+      );
     });
 
   if (multiplex) {
@@ -391,12 +424,21 @@ export async function llmTest(spark, port) {
       spark?.llmApiKeys?.[resolvedPort] ||
       null;
     if (apiKey) headers.Authorization = `Bearer ${String(apiKey).trim()}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000), headers });
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(3000),
+      headers,
+    });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 || res.status === 403) {
-      return { ok: false, message: "Auth required (set API key in LLM Settings)" };
+      return {
+        ok: false,
+        message: "Auth required (set API key in LLM Settings)",
+      };
     }
-    return { ok: res.ok, message: `Model: ${data?.data?.[0]?.id || "unknown"}` };
+    return {
+      ok: res.ok,
+      message: `Model: ${data?.data?.[0]?.id || "unknown"}`,
+    };
   } catch (err) {
     return { ok: false, message: err.message };
   }
@@ -404,7 +446,11 @@ export async function llmTest(spark, port) {
 
 /**
  * Test LLM connectivity on all configured ports.
- * Returns { ok: boolean, ports: { port, ok, message }[] }
+ * Returns { ok: boolean, ports: { port, ok, message }[], livePorts: number[] }
+ *
+ * `ok` means "at least one port answers": a multi-port host keeps its old port
+ * in the list across a model swap (5215 down while 5217 serves), and marking
+ * the whole unit unreachable because the retired port is dark would be wrong.
  */
 export async function llmTestAll(spark) {
   const ports = spark.llmPorts || (spark.llmPort ? [spark.llmPort] : [8888]);
@@ -412,10 +458,89 @@ export async function llmTestAll(spark) {
     ports.map(async (port) => {
       const result = await llmTest(spark, port);
       return { port, ...result };
-    })
+    }),
   );
-  const allOk = results.every((r) => r.ok);
-  return { ok: allOk, ports: results };
+  const livePorts = results.filter((r) => r.ok).map((r) => r.port);
+  const allOk = results.length > 0 && livePorts.length > 0;
+  return { ok: allOk, ports: results, livePorts };
+}
+
+/**
+ * Parse `ss -lnt` / `netstat -lnt` output into a sorted, deduped TCP port list.
+ * Local-address field is index 3 in both formats:
+ *   ss  -H : LISTEN 0 511 192.168.10.100:5217 0.0.0.0:*
+ *   netstat: tcp    0   0 0.0.0.0:5217        0.0.0.0:*  LISTEN
+ * @param {string} output
+ * @returns {number[]}
+ */
+export function parseListeningPorts(output) {
+  const ports = new Set();
+  for (const line of String(output || "").split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 4) continue;
+    const match = (parts[3] || "").match(/:(\d{1,5})$/);
+    if (!match) continue;
+    const port = Number.parseInt(match[1], 10);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) ports.add(port);
+  }
+  return [...ports].sort((a, b) => a - b);
+}
+
+/**
+ * Listening TCP ports on this unit — local exec or one SSH call. Best effort:
+ * any failure yields [] so discovery can never break the poll loop.
+ * @returns {Promise<number[]>}
+ */
+export async function listListeningPorts(spark) {
+  const cmd = "ss -lntH 2>/dev/null || netstat -lnt 2>/dev/null";
+  let out = "";
+  try {
+    if (spark?.isLocal) {
+      const { execFile } = await import("node:child_process");
+      out = await new Promise((resolve) => {
+        execFile("sh", ["-c", cmd], { timeout: 5000 }, (_err, stdout) =>
+          resolve(stdout || ""),
+        );
+      });
+    } else {
+      out = await sshExec(spark, cmd);
+    }
+  } catch {
+    return [];
+  }
+  return parseListeningPorts(out);
+}
+
+/**
+ * Auto-discovered LLM worker ports: every listening port inside the scan range
+ * that answers as an OpenAI-compatible LLM server. Auth-protected listeners
+ * (the llmRouter on 5207) are skipped — they are gateways, not model workers.
+ * @param {object} spark
+ * @param {{ start?: number, end?: number }} [opts]
+ * @returns {Promise<number[]>}
+ */
+export async function discoverLlmPorts(spark, opts = {}) {
+  const start = Number.isInteger(opts.start) ? opts.start : LLM_PORT_SCAN_START;
+  const end = Number.isInteger(opts.end) ? opts.end : LLM_PORT_SCAN_END;
+  // `listPorts` is a test seam — production always enumerates the unit itself.
+  const listPorts =
+    typeof opts.listPorts === "function" ? opts.listPorts : listListeningPorts;
+  let listening = [];
+  try {
+    listening = await listPorts(spark);
+  } catch {
+    return [];
+  }
+  const candidates = listening.filter((p) => p >= start && p <= end);
+  if (candidates.length === 0) return [];
+  const live = [];
+  await Promise.all(
+    candidates.map(async (port) => {
+      const result = await llmTest(spark, port);
+      if (result.ok) live.push(port);
+    }),
+  );
+  return live.sort((a, b) => a - b);
 }
 
 /**
@@ -426,7 +551,10 @@ export async function comfyTest(spark, port) {
   try {
     const host = llmProbeHost(spark);
     if (!isAllowedTargetHost(host)) {
-      return { ok: false, message: `Invalid or disallowed ComfyUI host: ${host}` };
+      return {
+        ok: false,
+        message: `Invalid or disallowed ComfyUI host: ${host}`,
+      };
     }
     const resolvedPort =
       Number.isInteger(port) && port >= 1 && port <= 65535

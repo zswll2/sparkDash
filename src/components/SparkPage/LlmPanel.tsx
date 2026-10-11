@@ -23,6 +23,8 @@ interface LlmPanelProps {
   sparkName?: string;
   llmPort: number;
   llmPorts?: number[];
+  /** Port found by server-side auto-discovery (not part of llmPorts). */
+  discovered?: boolean;
   hasApiKey?: boolean;
   /** Show "Copy image" in the benchmark dialogs (Settings, off by default). */
   shareImage?: boolean;
@@ -57,7 +59,11 @@ function readStoredRemote(): { host: string; port: string; tls: boolean } {
   try {
     const raw = localStorage.getItem(REMOTE_STORAGE_KEY);
     if (!raw) return { host: "", port: "443", tls: true };
-    const v = JSON.parse(raw) as { host?: string; port?: number; tls?: boolean };
+    const v = JSON.parse(raw) as {
+      host?: string;
+      port?: number;
+      tls?: boolean;
+    };
     return {
       host: typeof v.host === "string" ? v.host : "",
       port: v.port != null ? String(v.port) : "443",
@@ -136,7 +142,9 @@ function LlmLaunchers({
           type="button"
           onClick={onDecode}
           className={`${LAUNCHER_BTN} min-w-0 flex-1`}
-          title={t("Runs against this Spark’s LLM. Remote units use LAN HTTP, or an SSH tunnel to loopback if the server only listens on 127.0.0.1.")}
+          title={t(
+            "Runs against this Spark’s LLM. Remote units use LAN HTTP, or an SSH tunnel to loopback if the server only listens on 127.0.0.1.",
+          )}
         >
           {t("Run decode benchmark")}
         </button>
@@ -152,7 +160,9 @@ function LlmLaunchers({
               : "border-border bg-surface-elevated text-muted hover:border-accent hover:text-accent"
           }`}
           aria-expanded={remoteOpen}
-          title={t("On-demand bench against a typed host (HTTPS Tailscale, LAN IP, …). Not probed until you run.")}
+          title={t(
+            "On-demand bench against a typed host (HTTPS Tailscale, LAN IP, …). Not probed until you run.",
+          )}
         >
           {t("Remote")}
         </button>
@@ -162,7 +172,9 @@ function LlmLaunchers({
           type="button"
           onClick={onPrefill}
           className={`${LAUNCHER_BTN} min-w-0 flex-1`}
-          title={t("Runs against this Spark’s LLM. Remote units use LAN HTTP, or an SSH tunnel to loopback if the server only listens on 127.0.0.1.")}
+          title={t(
+            "Runs against this Spark’s LLM. Remote units use LAN HTTP, or an SSH tunnel to loopback if the server only listens on 127.0.0.1.",
+          )}
         >
           {t("Run prefill benchmark")}
         </button>
@@ -178,7 +190,9 @@ function LlmLaunchers({
               : "border-border bg-surface-elevated text-muted hover:border-accent hover:text-accent"
           }`}
           aria-expanded={remoteOpen}
-          title={t("On-demand bench against a typed host (HTTPS Tailscale, LAN IP, …). Not probed until you run.")}
+          title={t(
+            "On-demand bench against a typed host (HTTPS Tailscale, LAN IP, …). Not probed until you run.",
+          )}
         >
           {t("Remote")}
         </button>
@@ -186,10 +200,14 @@ function LlmLaunchers({
       {remoteOpen && (
         <div className="space-y-2 rounded border border-border bg-surface-elevated p-2">
           <p className="text-[10px] leading-snug text-muted">
-            {t("On-demand endpoint. Paste a URL or type host + port — nothing is probed until you run.")}
+            {t(
+              "On-demand endpoint. Paste a URL or type host + port — nothing is probed until you run.",
+            )}
           </p>
           <label className="block space-y-1">
-            <span className="text-[10px] uppercase tracking-wide text-muted">{t("Host")}</span>
+            <span className="text-[10px] uppercase tracking-wide text-muted">
+              {t("Host")}
+            </span>
             <input
               type="text"
               value={hostDraft}
@@ -204,7 +222,9 @@ function LlmLaunchers({
           </label>
           <div className="flex items-end gap-2">
             <label className="min-w-0 flex-1 space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-muted">{t("Port")}</span>
+              <span className="text-[10px] uppercase tracking-wide text-muted">
+                {t("Port")}
+              </span>
               <input
                 type="number"
                 min={1}
@@ -230,7 +250,9 @@ function LlmLaunchers({
               {t("HTTPS")}
             </label>
           </div>
-          {remoteError && <p className="text-[10px] text-danger">{remoteError}</p>}
+          {remoteError && (
+            <p className="text-[10px] text-danger">{remoteError}</p>
+          )}
           <div className="flex gap-2">
             <button
               type="button"
@@ -259,7 +281,7 @@ function LlmLaunchers({
           window.open(
             `/showcase/${encodeURIComponent(sparkId)}${q}`,
             "_blank",
-            "noopener,noreferrer"
+            "noopener,noreferrer",
           );
         }}
         className={`${LAUNCHER_BTN} w-full`}
@@ -272,7 +294,8 @@ function LlmLaunchers({
 
 /** Backend badge — neutral surfaces with a single accent dot. No blue/purple. */
 function BackendBadge({ backend }: { backend: string | null }) {
-  if (!backend) return <span className="text-xs text-muted">{t("No backend")}</span>;
+  if (!backend)
+    return <span className="text-xs text-muted">{t("No backend")}</span>;
 
   const labels: Record<string, string> = {
     vllm: "vLLM",
@@ -387,6 +410,7 @@ export function LlmPanel({
   sparkName,
   llmPort,
   llmPorts,
+  discovered = false,
   hasApiKey = false,
   shareImage = false,
   onRemovePort,
@@ -394,19 +418,34 @@ export function LlmPanel({
 }: LlmPanelProps) {
   // Tail keyed by port so multi-port LLM sparklines stay distinct (8b).
   const genHistory = useMetricsHistoryTail(sparkId, `llm:${llmPort}.tps`);
-  const prefillHistory = useMetricsHistoryTail(sparkId, `llm:${llmPort}.prefill`);
-  const cachedPrefillHistory = useMetricsHistoryTail(sparkId, `llm:${llmPort}.prefillCached`);
-  const uncachedPrefillHistory = useMetricsHistoryTail(sparkId, `llm:${llmPort}.prefillUncached`);
+  const prefillHistory = useMetricsHistoryTail(
+    sparkId,
+    `llm:${llmPort}.prefill`,
+  );
+  const cachedPrefillHistory = useMetricsHistoryTail(
+    sparkId,
+    `llm:${llmPort}.prefillCached`,
+  );
+  const uncachedPrefillHistory = useMetricsHistoryTail(
+    sparkId,
+    `llm:${llmPort}.prefillUncached`,
+  );
 
   // Full series (~1 h) for running averages over busy (>0) samples only.
   const genFull = useMetricsHistory(sparkId, `llm:${llmPort}.tps`);
   const prefillFull = useMetricsHistory(sparkId, `llm:${llmPort}.prefill`);
   const cachedFull = useMetricsHistory(sparkId, `llm:${llmPort}.prefillCached`);
-  const uncachedFull = useMetricsHistory(sparkId, `llm:${llmPort}.prefillUncached`);
+  const uncachedFull = useMetricsHistory(
+    sparkId,
+    `llm:${llmPort}.prefillUncached`,
+  );
   const genAvg = useMemo(() => avgPositive(genFull), [genFull]);
   const prefillAvg = useMemo(() => avgPositive(prefillFull), [prefillFull]);
   const cachedPrefillAvg = useMemo(() => avgPositive(cachedFull), [cachedFull]);
-  const uncachedPrefillAvg = useMemo(() => avgPositive(uncachedFull), [uncachedFull]);
+  const uncachedPrefillAvg = useMemo(
+    () => avgPositive(uncachedFull),
+    [uncachedFull],
+  );
   const [showSettings, setShowSettings] = useState(false);
   const [portDraft, setPortDraft] = useState(String(llmPort));
   const [apiKeyDraft, setApiKeyDraft] = useState("");
@@ -451,7 +490,8 @@ export function LlmPanel({
 
   const generationTps = llm?.generationTps ?? 0;
   const prefillTps = llm?.prefillTps ?? 0;
-  const showPrefillSplit = llm?.cachedPrefillTps != null || llm?.uncachedPrefillTps != null;
+  const showPrefillSplit =
+    llm?.cachedPrefillTps != null || llm?.uncachedPrefillTps != null;
   const cachedPrefillTps = llm?.cachedPrefillTps ?? 0;
   const uncachedPrefillTps = llm?.uncachedPrefillTps ?? 0;
   const available = llm?.available ?? false;
@@ -498,7 +538,9 @@ export function LlmPanel({
         }
         // Rename this panel's port in-place so sibling ports (and their keys) survive
         if (currentPorts.length > 1) {
-          const next = currentPorts.map((p) => (p === llmPort ? parsedPort : p));
+          const next = currentPorts.map((p) =>
+            p === llmPort ? parsedPort : p,
+          );
           await updateLlmPorts(sparkId, next);
         } else {
           await updateLlmPort(sparkId, parsedPort);
@@ -514,7 +556,9 @@ export function LlmPanel({
       setClearApiKey(false);
       setShowSettings(false);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save LLM settings");
+      setSaveError(
+        err instanceof Error ? err.message : "Failed to save LLM settings",
+      );
     } finally {
       setSaving(false);
     }
@@ -528,6 +572,16 @@ export function LlmPanel({
       className={`panel-llm ${className}`}
       actions={
         <div className="flex items-center gap-1.5">
+          {discovered && (
+            <span
+              className="rounded px-1.5 py-0.5 text-[10px] text-muted"
+              title={t(
+                "Found automatically by scanning this unit's listening ports",
+              )}
+            >
+              {t("Auto")}
+            </span>
+          )}
           {onRemovePort && (
             <button
               type="button"
@@ -565,7 +619,9 @@ export function LlmPanel({
       {showSettings ? (
         <div className="space-y-3">
           <p className="text-[10px] text-muted">
-            {t("HTTP port of the LLM server on this Spark (vLLM / llama.cpp / sglang / ds4 / EXL3 / OpenAI-compatible gateway).")}
+            {t(
+              "HTTP port of the LLM server on this Spark (vLLM / llama.cpp / sglang / ds4 / EXL3 / OpenAI-compatible gateway).",
+            )}
           </p>
           <label className="block space-y-1">
             <span className="text-xs text-muted">{t("Port")}</span>
@@ -589,14 +645,20 @@ export function LlmPanel({
             />
           </label>
           <label className="block space-y-1">
-            <span className="text-xs text-muted">{t("API key (optional)")}</span>
+            <span className="text-xs text-muted">
+              {t("API key (optional)")}
+            </span>
             <input
               type="password"
               autoComplete="new-password"
               spellCheck={false}
               value={apiKeyDraft}
               disabled={clearApiKey}
-              placeholder={hasApiKey && !clearApiKey ? t("•••••••• (saved — leave blank to keep)") : t("Bearer token if required")}
+              placeholder={
+                hasApiKey && !clearApiKey
+                  ? t("•••••••• (saved — leave blank to keep)")
+                  : t("Bearer token if required")
+              }
               onChange={(e) => {
                 setApiKeyDraft(e.target.value);
                 setClearApiKey(false);
@@ -627,7 +689,9 @@ export function LlmPanel({
             </label>
           )}
           {portInvalid && (
-            <p className="text-[10px] text-danger">{t("Enter an integer between 1 and 65535")}</p>
+            <p className="text-[10px] text-danger">
+              {t("Enter an integer between 1 and 65535")}
+            </p>
           )}
           {saveError && <p className="text-[10px] text-danger">{saveError}</p>}
           <div className="flex items-center justify-end gap-2">
@@ -693,27 +757,37 @@ export function LlmPanel({
                 {llm.modelId}
               </span>
             )}
-            <span className="shrink-0 font-tabular text-[10px] text-muted">:{llmPort}</span>
+            <span className="shrink-0 font-tabular text-[10px] text-muted">
+              :{llmPort}
+            </span>
           </div>
           {llm?.modelPath &&
             llm.modelPath !== llm.modelId &&
             !llm.modelPath.includes("models--") && (
-            <div className="-mt-1.5 truncate text-[10px] text-muted" title={llm.modelPath}>
-              {llm.modelPath}
-            </div>
-          )}
+              <div
+                className="-mt-1.5 truncate text-[10px] text-muted"
+                title={llm.modelPath}
+              >
+                {llm.modelPath}
+              </div>
+            )}
 
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted">{t("Generation tok/s")}</span>
             <div className="flex items-center gap-2">
-              <Sparkline data={genHistory} color="var(--color-accent)" height={24} />
+              <Sparkline
+                data={genHistory}
+                color="var(--color-accent)"
+                height={24}
+              />
               <div className="text-right">
                 <div className="font-tabular text-sm font-semibold text-accent">
                   {generationTps.toFixed(1)}
                 </div>
                 {genAvg != null && (
                   <div className="font-tabular text-[9px] text-muted">
-                    {t("avg")} {genAvg >= 100 ? genAvg.toFixed(0) : genAvg.toFixed(1)}
+                    {t("avg")}{" "}
+                    {genAvg >= 100 ? genAvg.toFixed(0) : genAvg.toFixed(1)}
                   </div>
                 )}
               </div>
@@ -721,18 +795,27 @@ export function LlmPanel({
           </div>
           <div
             className="flex items-center justify-between"
-            title={t("Tokens/sec while the engine is reading the prompt and building KV cache — before the first output token. Opening a saved chat in the UI does not hit the GPU; send (or regenerate) so the history is sent as the prompt. Prefix-cache hits do little compute, so this can stay ~0. Long cold prefills show here until decode starts.")}
+            title={t(
+              "Tokens/sec while the engine is reading the prompt and building KV cache — before the first output token. Opening a saved chat in the UI does not hit the GPU; send (or regenerate) so the history is sent as the prompt. Prefix-cache hits do little compute, so this can stay ~0. Long cold prefills show here until decode starts.",
+            )}
           >
             <span className="text-xs text-muted">{t("Prefill tok/s")}</span>
             <div className="flex items-center gap-2">
-              <Sparkline data={prefillHistory} color="var(--color-text)" height={24} />
+              <Sparkline
+                data={prefillHistory}
+                color="var(--color-text)"
+                height={24}
+              />
               <div className="text-right">
                 <div className="font-tabular text-sm font-semibold text-text">
                   {prefillTps.toFixed(1)}
                 </div>
                 {prefillAvg != null && (
                   <div className="font-tabular text-[9px] text-muted">
-                    {t("avg")} {prefillAvg >= 100 ? prefillAvg.toFixed(0) : prefillAvg.toFixed(1)}
+                    {t("avg")}{" "}
+                    {prefillAvg >= 100
+                      ? prefillAvg.toFixed(0)
+                      : prefillAvg.toFixed(1)}
                   </div>
                 )}
               </div>
@@ -742,18 +825,29 @@ export function LlmPanel({
             <>
               <div
                 className="flex items-center justify-between"
-                title={t("Prefill tokens served from prefix cache (little GPU work). High values mean prompt reuse, not a faster cold prefill.")}
+                title={t(
+                  "Prefill tokens served from prefix cache (little GPU work). High values mean prompt reuse, not a faster cold prefill.",
+                )}
               >
-                <span className="text-xs text-muted">{t("Cached prefill tok/s")}</span>
+                <span className="text-xs text-muted">
+                  {t("Cached prefill tok/s")}
+                </span>
                 <div className="flex items-center gap-2">
-                  <Sparkline data={cachedPrefillHistory} color="var(--color-muted)" height={24} />
+                  <Sparkline
+                    data={cachedPrefillHistory}
+                    color="var(--color-muted)"
+                    height={24}
+                  />
                   <div className="text-right">
                     <div className="font-tabular text-sm font-semibold text-muted">
                       {cachedPrefillTps.toFixed(1)}
                     </div>
                     {cachedPrefillAvg != null && (
                       <div className="font-tabular text-[9px] text-muted">
-                        {t("avg")} {cachedPrefillAvg >= 100 ? cachedPrefillAvg.toFixed(0) : cachedPrefillAvg.toFixed(1)}
+                        {t("avg")}{" "}
+                        {cachedPrefillAvg >= 100
+                          ? cachedPrefillAvg.toFixed(0)
+                          : cachedPrefillAvg.toFixed(1)}
                       </div>
                     )}
                   </div>
@@ -761,18 +855,29 @@ export function LlmPanel({
               </div>
               <div
                 className="flex items-center justify-between"
-                title={t("Uncached (computed) prefill — tokens that actually build KV cache on the GPU.")}
+                title={t(
+                  "Uncached (computed) prefill — tokens that actually build KV cache on the GPU.",
+                )}
               >
-                <span className="text-xs text-muted">{t("Uncached prefill tok/s")}</span>
+                <span className="text-xs text-muted">
+                  {t("Uncached prefill tok/s")}
+                </span>
                 <div className="flex items-center gap-2">
-                  <Sparkline data={uncachedPrefillHistory} color="var(--color-text)" height={24} />
+                  <Sparkline
+                    data={uncachedPrefillHistory}
+                    color="var(--color-text)"
+                    height={24}
+                  />
                   <div className="text-right">
                     <div className="font-tabular text-sm font-semibold text-text">
                       {uncachedPrefillTps.toFixed(1)}
                     </div>
                     {uncachedPrefillAvg != null && (
                       <div className="font-tabular text-[9px] text-muted">
-                        {t("avg")} {uncachedPrefillAvg >= 100 ? uncachedPrefillAvg.toFixed(0) : uncachedPrefillAvg.toFixed(1)}
+                        {t("avg")}{" "}
+                        {uncachedPrefillAvg >= 100
+                          ? uncachedPrefillAvg.toFixed(0)
+                          : uncachedPrefillAvg.toFixed(1)}
                       </div>
                     )}
                   </div>
@@ -786,7 +891,9 @@ export function LlmPanel({
 
           <div className="grid grid-cols-4 gap-2 border-t border-border pt-3">
             <div className="space-y-0.5">
-              <div className="text-[10px] uppercase tracking-wide text-muted">{t("Slots")}</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted">
+                {t("Slots")}
+              </div>
               <div className="font-tabular text-sm text-text">
                 {(llm?.slotsTotal ?? 0) > 0
                   ? `${llm?.slotsActive ?? 0} / ${llm?.slotsTotal ?? 0}`
@@ -796,7 +903,9 @@ export function LlmPanel({
               </div>
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] uppercase tracking-wide text-muted">{t("Context")}</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted">
+                {t("Context")}
+              </div>
               <div className="font-tabular text-sm text-text">
                 {llm?.contextLength ? llm.contextLength.toLocaleString() : "—"}
               </div>
@@ -837,7 +946,9 @@ export function LlmPanel({
                       onMouseLeave={startEngineInfoTimer}
                       className="absolute left-0 top-full z-10 mt-1 w-56 rounded-md border border-border bg-surface-elevated px-3 py-2 text-left text-[11px] font-normal normal-case text-text shadow-lg"
                     >
-                      {t("Active = processing or ready for requests. Sleeping = idle, GPU memory freed until next request.")}
+                      {t(
+                        "Active = processing or ready for requests. Sleeping = idle, GPU memory freed until next request.",
+                      )}
                     </div>
                   )}
                 </button>
@@ -851,7 +962,9 @@ export function LlmPanel({
               </div>
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] uppercase tracking-wide text-muted">{t("Total Generated")}</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted">
+                {t("Total Generated")}
+              </div>
               <div className="font-tabular text-sm text-text">
                 {llm && llm.totalOutputTokens > 0
                   ? llm.totalOutputTokens.toLocaleString()
@@ -914,7 +1027,9 @@ export function LlmPanel({
                   setOpenId={setMetricInfoId}
                 />
                 <div className="font-tabular text-sm text-text">
-                  {llm.ttftP95Seconds != null ? `${llm.ttftP95Seconds.toFixed(3)}s` : "—"}
+                  {llm.ttftP95Seconds != null
+                    ? `${llm.ttftP95Seconds.toFixed(3)}s`
+                    : "—"}
                 </div>
               </div>
               <div className="space-y-0.5">
@@ -961,7 +1076,9 @@ export function LlmPanel({
                   align="right"
                 />
                 <div className="font-tabular text-sm text-text">
-                  {llm.e2eP95Seconds != null ? `${llm.e2eP95Seconds.toFixed(3)}s` : "—"}
+                  {llm.e2eP95Seconds != null
+                    ? `${llm.e2eP95Seconds.toFixed(3)}s`
+                    : "—"}
                 </div>
               </div>
               <div className="space-y-0.5">
@@ -973,7 +1090,9 @@ export function LlmPanel({
                   setOpenId={setMetricInfoId}
                 />
                 <div className="font-tabular text-sm text-text">
-                  {llm.itlP95Seconds != null ? `${llm.itlP95Seconds.toFixed(3)}s` : "—"}
+                  {llm.itlP95Seconds != null
+                    ? `${llm.itlP95Seconds.toFixed(3)}s`
+                    : "—"}
                 </div>
               </div>
               <div className="space-y-0.5">
@@ -1011,7 +1130,7 @@ export function LlmPanel({
         onClose={() => setBenchOpen(false)}
         sparkId={sparkId}
         llmPort={llmPort}
-        modelId={remoteTarget ? null : llm?.modelId ?? null}
+        modelId={remoteTarget ? null : (llm?.modelId ?? null)}
         remoteTarget={remoteTarget}
         shareImage={shareImage}
         sparkName={sparkName ?? null}
@@ -1021,8 +1140,8 @@ export function LlmPanel({
         onClose={() => setPrefillBenchOpen(false)}
         sparkId={sparkId}
         llmPort={llmPort}
-        modelId={remoteTarget ? null : llm?.modelId ?? null}
-        contextLength={remoteTarget ? null : llm?.contextLength ?? null}
+        modelId={remoteTarget ? null : (llm?.modelId ?? null)}
+        contextLength={remoteTarget ? null : (llm?.contextLength ?? null)}
         remoteTarget={remoteTarget}
         shareImage={shareImage}
         sparkName={sparkName ?? null}

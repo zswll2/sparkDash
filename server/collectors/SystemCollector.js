@@ -1829,6 +1829,7 @@ export class SystemCollector {
       let smiOut = "";
       let cpuinfo = "";
       let meminfo = "";
+      let sysVendorRaw = "";
       let coresParsed = null;
       if (this.spark.isLocal) {
         const results = await Promise.all([
@@ -1837,10 +1838,12 @@ export class SystemCollector {
           ).catch(() => ""),
           this._readHostFile("/proc/cpuinfo").catch(() => ""),
           this._readHostFile("/proc/meminfo").catch(() => ""),
+          this._readHostFile("/sys/class/dmi/id/sys_vendor").catch(() => ""),
         ]);
         smiOut = results[0];
         cpuinfo = results[1];
         meminfo = results[2];
+        sysVendorRaw = results[3] || "";
         coresParsed = (cpuinfo.match(/processor\s*:/g) || []).length;
       } else {
         const out = await sshExec(this.spark, [
@@ -1851,11 +1854,14 @@ export class SystemCollector {
           "grep -E 'processor\\s*:' /proc/cpuinfo | wc -l",
           "echo '---'",
           "grep -E 'MemTotal' /proc/meminfo",
+          "echo '---'",
+          "cat /sys/class/dmi/id/sys_vendor 2>/dev/null",
         ].join("; "));
         const parts = out.split("---");
         smiOut = parts[0]?.trim() || "";
         cpuinfo = parts[1]?.trim() || "";
         meminfo = parts[3]?.trim() || "";
+        sysVendorRaw = parts[4]?.trim() || "";
         const n = parseInt(parts[2]?.trim() || "", 10);
         coresParsed = Number.isInteger(n) && n > 0 ? n : null;
       }
@@ -1882,6 +1888,15 @@ export class SystemCollector {
         gpuChip,
         cudaDriver,
         storageModel: null,
+        /**
+         * DMI vendor of the machine (`QEMU`/`KVM` on a hypervisor guest). A GPU
+         * visible through nvidia-smi on such a guest can only have been passed
+         * through — the guest has no other way to see a physical card.
+         */
+        virtualized: sysVendorRaw || null,
+        gpuPassthrough:
+          Boolean(gpuChip) &&
+          /qemu|kvm|vmware|microsoft|innotek|parallels|bochs/i.test(sysVendorRaw || ""),
       };
     } catch {
       return null;

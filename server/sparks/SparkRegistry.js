@@ -68,10 +68,11 @@ export class SparkRegistry {
     if (!config.id) throw new Error("Spark config must have an 'id'");
     if (!isValidSparkId(config.id)) {
       throw new Error(
-        "Invalid Spark id: allowed characters are a-z A-Z 0-9 . _ -, length 1–64, and reserved names are not allowed"
+        "Invalid Spark id: allowed characters are a-z A-Z 0-9 . _ -, length 1–64, and reserved names are not allowed",
       );
     }
-    if (this.getSpark(config.id)) throw new Error(`Spark ${config.id} already exists`);
+    if (this.getSpark(config.id))
+      throw new Error(`Spark ${config.id} already exists`);
     const spark = this._normalizeConfig(config);
     const nextSparks = [...this._sparks, spark];
     this._save(nextSparks);
@@ -103,7 +104,10 @@ export class SparkRegistry {
     const prev = this._sparks[idx];
     if (prev.detectedMacAddress === clean) return null;
     const nextSparks = [...this._sparks];
-    nextSparks[idx] = this._normalizeConfig({ ...prev, detectedMacAddress: clean });
+    nextSparks[idx] = this._normalizeConfig({
+      ...prev,
+      detectedMacAddress: clean,
+    });
     this._save(nextSparks);
     this._sparks = nextSparks;
     this._emit("update", this._withSecrets(this._sparks[idx]));
@@ -116,8 +120,11 @@ export class SparkRegistry {
     if (idx === -1) throw new Error(`Spark ${id} not found`);
 
     // Client cannot set detectedMacAddress (auto from enP7s7 only)
-    const { id: _ignoreId, detectedMacAddress: _ignoreDetected, ...rawUpdates } =
-      updates || {};
+    const {
+      id: _ignoreId,
+      detectedMacAddress: _ignoreDetected,
+      ...rawUpdates
+    } = updates || {};
     const prev = this._sparks[idx];
 
     /** @type {Record<string, unknown>} */
@@ -205,7 +212,8 @@ export class SparkRegistry {
    * @returns {object[]} public sparks in new order
    */
   reorderSparks(orderedIds) {
-    if (!Array.isArray(orderedIds)) throw new Error("order must be an array of spark ids");
+    if (!Array.isArray(orderedIds))
+      throw new Error("order must be an array of spark ids");
     const byId = new Map(this._sparks.map((s) => [s.id, s]));
     const seen = new Set();
     const next = [];
@@ -256,7 +264,7 @@ export class SparkRegistry {
           migratedSecrets = true;
           console.warn(
             `[SparkRegistry] Migrated password for ${s.id} from sparks.json into encrypted secrets store; ` +
-              `rotate this credential if it was previously exposed.`
+              `rotate this credential if it was previously exposed.`,
           );
         }
         this._sparks.push(this._normalizeConfig(s));
@@ -270,7 +278,10 @@ export class SparkRegistry {
         this._sparks = [];
         this._save();
       } else {
-        console.error("[SparkRegistry] Failed to load sparks.json:", err.message);
+        console.error(
+          "[SparkRegistry] Failed to load sparks.json:",
+          err.message,
+        );
         this._sparks = [];
       }
     }
@@ -300,11 +311,11 @@ export class SparkRegistry {
       if (orphans.length === 1 && missing.length === 1) {
         this.moveLlmApiKey(spark.id, orphans[0], missing[0]);
         console.warn(
-          `[SparkRegistry] migrated LLM API key for spark ${spark.id}: port ${orphans[0]} -> port ${missing[0]} after out-of-band config change`
+          `[SparkRegistry] migrated LLM API key for spark ${spark.id}: port ${orphans[0]} -> port ${missing[0]} after out-of-band config change`,
         );
       } else if (orphans.length > 0 || missing.length > 0) {
         console.warn(
-          `[SparkRegistry] spark ${spark.id} LLM key/port mismatch: keyed=<${orphans.join(", ")}> missing=<${missing.join(", ")}>`
+          `[SparkRegistry] spark ${spark.id} LLM key/port mismatch: keyed=<${orphans.join(", ")}> missing=<${missing.join(", ")}>`,
         );
       }
     }
@@ -324,7 +335,11 @@ export class SparkRegistry {
       // Atomic write (tmp + rename) — a SIGKILL/power loss mid-write must not
       // truncate the registry and silently drop every Spark on next restart.
       // 0o644 keeps the registry readable so root/non-root container users share it.
-      atomicWrite(SPARKS_JSON_PATH, JSON.stringify(data, null, 2) + "\n", 0o644);
+      atomicWrite(
+        SPARKS_JSON_PATH,
+        JSON.stringify(data, null, 2) + "\n",
+        0o644,
+      );
     } catch (cause) {
       const err = new Error("Registry persistence failed", { cause });
       err.status = 500;
@@ -367,7 +382,8 @@ export class SparkRegistry {
 
   /** Public helper: set password without other config changes (e.g. from Test / Edit). */
   setPassword(id, password) {
-    if (!this._sparks.find((s) => s.id === id)) throw new Error(`Spark ${id} not found`);
+    if (!this._sparks.find((s) => s.id === id))
+      throw new Error(`Spark ${id} not found`);
     this._storePassword(id, password);
     return this.toPublic(this.getSpark(id));
   }
@@ -404,7 +420,8 @@ export class SparkRegistry {
    * @param {string|null|undefined} apiKey  null/undefined = no-op; "" = clear
    */
   setLlmApiKey(id, port, apiKey) {
-    if (!this._sparks.find((s) => s.id === id)) throw new Error(`Spark ${id} not found`);
+    if (!this._sparks.find((s) => s.id === id))
+      throw new Error(`Spark ${id} not found`);
     const p = Number(port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) {
       throw new Error("port must be an integer 1–65535");
@@ -450,7 +467,8 @@ export class SparkRegistry {
    * @param {number} toPort
    */
   moveLlmApiKey(id, fromPort, toPort) {
-    if (!this._sparks.find((s) => s.id === id)) throw new Error(`Spark ${id} not found`);
+    if (!this._sparks.find((s) => s.id === id))
+      throw new Error(`Spark ${id} not found`);
     const from = Number(fromPort);
     const to = Number(toPort);
     if (!Number.isInteger(from) || from < 1 || from > 65535) {
@@ -482,7 +500,7 @@ export class SparkRegistry {
     const keep = new Set(
       (Array.isArray(keepPorts) ? keepPorts : [])
         .map((p) => String(p))
-        .filter(Boolean)
+        .filter(Boolean),
     );
     let changed = false;
     const next = {};
@@ -523,14 +541,19 @@ export class SparkRegistry {
     if (armed) {
       const existing = this.getSpark(id);
       if (!existing) throw new Error(`Spark ${id} not found`);
-      prevPorts = Array.isArray(existing.llmPorts) ? [...existing.llmPorts] : [];
+      prevPorts = Array.isArray(existing.llmPorts)
+        ? [...existing.llmPorts]
+        : [];
     }
     const updated = this.updateSpark(id, body);
     const llmPortsSynced = armed && Array.isArray(updated.llmPorts);
     if (llmPortsSynced) {
       this.syncLlmApiKeysToPorts(id, prevPorts, updated.llmPorts);
     }
-    return { spark: llmPortsSynced ? this.getSpark(id) : updated, llmPortsSynced };
+    return {
+      spark: llmPortsSynced ? this.getSpark(id) : updated,
+      llmPortsSynced,
+    };
   }
 
   syncLlmApiKeysToPorts(id, prevPorts, nextPorts) {
@@ -596,11 +619,21 @@ export class SparkRegistry {
       isLocal: Boolean(config.isLocal),
       ssh,
       llmPorts,
+      /**
+       * Auto-discovery of LLM worker ports (default on). The monitor lists this
+       * unit's listening ports in LLM_PORT_SCAN_* and probes each, so a worker
+       * that moves to a new port (or a second model that appears) is shown with
+       * no config edit. Explicit llmPorts are always probed as well; set
+       * llmPortScan:false to pin the list. Never written back by the dashboard.
+       */
+      llmPortScan: config.llmPortScan !== false,
       role,
       /** When true, this Spark is an LLM worker — no local API card / probe. */
       workerNode: isWorker,
       /** Optional cluster/model name for overview when role is worker. */
-      workerLabel: isWorker ? this._normalizeWorkerLabel(config.workerLabel) : null,
+      workerLabel: isWorker
+        ? this._normalizeWorkerLabel(config.workerLabel)
+        : null,
       /** Optional head Spark id when role is worker. */
       workerHeadId: isWorker
         ? this._normalizeWorkerHeadId(config.workerHeadId, config.id)
@@ -610,7 +643,11 @@ export class SparkRegistry {
        * Head always on; worker always off.
        */
       llmMonitoring:
-        role === "worker" ? false : role === "head" ? true : config.llmMonitoring !== false,
+        role === "worker"
+          ? false
+          : role === "head"
+            ? true
+            : config.llmMonitoring !== false,
       /**
        * Probe local ComfyUI and show the ComfyUI card (default false; all roles).
        */
@@ -626,8 +663,12 @@ export class SparkRegistry {
        * the SparkMonitor checks for updates and allows one-click `hermes update`.
        */
       hermesMonitoring: Boolean(config.hermesMonitoring),
-      disabledDevices: Array.isArray(config.disabledDevices) ? config.disabledDevices : [],
-      disabledInterfaces: Array.isArray(config.disabledInterfaces) ? config.disabledInterfaces : [],
+      disabledDevices: Array.isArray(config.disabledDevices)
+        ? config.disabledDevices
+        : [],
+      disabledInterfaces: Array.isArray(config.disabledInterfaces)
+        ? config.disabledInterfaces
+        : [],
       storagePollDisabled: Boolean(config.storagePollDisabled),
     };
   }
@@ -650,7 +691,8 @@ export class SparkRegistry {
   _coerceRole(value) {
     if (typeof value !== "string") return null;
     const role = value.trim().toLowerCase();
-    if (role === "head" || role === "worker" || role === "standalone") return role;
+    if (role === "head" || role === "worker" || role === "standalone")
+      return role;
     return null;
   }
 

@@ -1,13 +1,26 @@
-import type { SensorMetrics, SensorReading } from "../../api/types";
+import type {
+  GpuMetrics,
+  HardwareInfo,
+  SensorMetrics,
+  SensorReading,
+} from "../../api/types";
 import { Panel } from "../ui/Panel";
 import { Sparkline } from "../ui/Sparkline";
-import { FanIcon, ThermometerIcon } from "../ui/icons";
+import { ActivityIcon, FanIcon, ThermometerIcon } from "../ui/icons";
 import { useMetricsHistoryTail } from "../../hooks/metricsStore";
 import { t } from "../../i18n";
 
 interface HardwarePanelProps {
   /** Sensor inventory for this unit; null/undefined when the server omits it. */
   sensors: SensorMetrics | null | undefined;
+  /**
+   * Live GPU metrics. Used for the pass-through block: a hypervisor guest has
+   * no hwmon chips, so the passed-through card is the only hardware it can
+   * report, and it belongs in this card rather than nowhere.
+   */
+  gpu?: GpuMetrics | null;
+  /** Static hardware summary (GPU chip, driver, DMI vendor, passthrough flag). */
+  hardware?: HardwareInfo | null;
   sparkId: string;
   temperatureUnit: "celsius" | "fahrenheit";
   className?: string;
@@ -34,7 +47,10 @@ const READING_LABELS: Record<string, string> = {
 };
 
 function readingLabel(reading: { key: string; label: string }): string {
-  const source = READING_LABELS[reading.label] ?? READING_LABELS[reading.key] ?? reading.label;
+  const source =
+    READING_LABELS[reading.label] ??
+    READING_LABELS[reading.key] ??
+    reading.label;
   return t(source);
 }
 
@@ -44,7 +60,8 @@ function readingLabel(reading: { key: string; label: string }): string {
  * NVMe row amber or let a 90 °C socket read as fine.
  */
 function tempColor(celsius: number, family: "cpu" | "disk" | "other"): string {
-  const [warn, crit] = family === "disk" ? [70, 80] : family === "cpu" ? [85, 95] : [85, 100];
+  const [warn, crit] =
+    family === "disk" ? [70, 80] : family === "cpu" ? [85, 95] : [85, 100];
   if (celsius >= crit) return "var(--color-danger)";
   if (celsius >= warn) return "var(--color-warning)";
   return "var(--color-accent)";
@@ -80,7 +97,9 @@ function ReadingRow({
 
 function GroupHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-wide text-muted">{children}</div>
+    <div className="text-[10px] uppercase tracking-wide text-muted">
+      {children}
+    </div>
   );
 }
 
@@ -95,6 +114,8 @@ function GroupHeading({ children }: { children: React.ReactNode }) {
  */
 export function HardwarePanel({
   sensors,
+  gpu,
+  hardware,
   sparkId,
   temperatureUnit,
   className,
@@ -106,7 +127,10 @@ export function HardwarePanel({
     temperatureUnit === "fahrenheit"
       ? `${celsiusToFahrenheit(celsius)}°F`
       : `${celsius}°C`;
-  const formatReading = (reading: SensorReading, family: "cpu" | "disk" | "other") => (
+  const formatReading = (
+    reading: SensorReading,
+    family: "cpu" | "disk" | "other",
+  ) => (
     <ReadingRow
       key={reading.key}
       label={readingLabel(reading)}
@@ -116,6 +140,86 @@ export function HardwarePanel({
     />
   );
 
+  /**
+   * Pass-through GPU block. Rendered only when the card was detected inside a
+   * virtual machine (DMI vendor): a bare-metal GPU already has its own panel
+   * and duplicating it here would be noise, while a guest has no other way to
+   * show that its GPU is alive.
+   */
+  const gpuPassthroughCard =
+    hardware?.gpuPassthrough && (gpu || hardware?.gpuChip) ? (
+      <section className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <GroupHeading>
+            <span className="inline-flex items-center gap-1">
+              <ActivityIcon className="h-3 w-3" />
+              {t("Pass-through GPU")}
+            </span>
+          </GroupHeading>
+          <span
+            className="text-[10px] text-muted"
+            title={t("Visible inside a virtual machine — PCIe passthrough")}
+          >
+            {t("PCIe passthrough")}
+          </span>
+        </div>
+        {hardware?.gpuChip && (
+          <ReadingRow
+            label={hardware.gpuChip}
+            value={
+              hardware.cudaDriver ? `driver ${hardware.cudaDriver}` : t("GPU")
+            }
+            color="var(--color-accent)"
+            title={`${hardware.gpuChip}${hardware.cudaDriver ? ` · driver ${hardware.cudaDriver}` : ""}`}
+          />
+        )}
+        {gpu && (
+          <>
+            <ReadingRow
+              label={t("GPU temperature")}
+              value={formatTemp(gpu.temperature)}
+              color={tempColor(gpu.temperature, "other")}
+              title={`${t("GPU temperature")} · ${gpu.temperature}°C`}
+            />
+            <ReadingRow
+              label={t("GPU power")}
+              value={`${gpu.power.draw} / ${gpu.power.limit} W`}
+              color="var(--color-accent)"
+            />
+            <ReadingRow
+              label={t("VRAM")}
+              value={`${gpu.vram.used} / ${gpu.vram.total} MB · ${gpu.vram.percentage}%`}
+              color={
+                gpu.vram.percentage >= 97
+                  ? "var(--color-warning)"
+                  : "var(--color-accent)"
+              }
+            />
+            <ReadingRow
+              label={t("GPU utilization")}
+              value={`${gpu.usage}%`}
+              color="var(--color-accent)"
+            />
+            {gpu.throttle && (
+              <ReadingRow
+                label={t("Throttle")}
+                value={
+                  gpu.throttle.active
+                    ? gpu.throttle.reason || t("limited")
+                    : t("none")
+                }
+                color={
+                  gpu.throttle.active
+                    ? "var(--color-warning)"
+                    : "var(--color-accent)"
+                }
+              />
+            )}
+          </>
+        )}
+      </section>
+    ) : null;
+
   return (
     <Panel
       title={t("Hardware sensors")}
@@ -123,13 +227,18 @@ export function HardwarePanel({
       className={`panel-hardware ${className ?? ""}`}
       bodyClassName="space-y-3"
     >
+      {gpuPassthroughCard}
       {!available ? (
         <p className="text-xs text-muted">
           {sensors?.reason === "unreadable"
             ? t("Sensor chips could not be read (SSH or sysfs error).")
-            : t(
-                "This machine exposes no hardware sensors (virtual machine or no monitoring chip)."
-              )}
+            : gpuPassthroughCard
+              ? t(
+                  "No board sensors on this unit — the pass-through GPU above is the only hardware it can measure.",
+                )
+              : t(
+                  "This machine exposes no hardware sensors (virtual machine or no monitoring chip).",
+                )}
         </p>
       ) : (
         <>
@@ -156,8 +265,12 @@ export function HardwarePanel({
               />
             )}
             {sensors?.igpu && formatReading(sensors.igpu, "other")}
-            {(sensors?.board ?? []).map((reading) => formatReading(reading, "other"))}
-            {(sensors?.disks ?? []).map((reading) => formatReading(reading, "disk"))}
+            {(sensors?.board ?? []).map((reading) =>
+              formatReading(reading, "other"),
+            )}
+            {(sensors?.disks ?? []).map((reading) =>
+              formatReading(reading, "disk"),
+            )}
             {(sensors?.nics ?? []).map((reading) => (
               <ReadingRow
                 key={reading.key}
@@ -189,7 +302,9 @@ export function HardwarePanel({
                       : fan.label
                   }
                   value={
-                    fan.pwmPercent != null ? `${fan.rpm} · ${fan.pwmPercent}%` : String(fan.rpm)
+                    fan.pwmPercent != null
+                      ? `${fan.rpm} · ${fan.pwmPercent}%`
+                      : String(fan.rpm)
                   }
                   color="var(--color-accent)"
                   title={

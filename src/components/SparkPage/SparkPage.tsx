@@ -1,7 +1,12 @@
 import { useState, useEffect, useCallback, type CSSProperties } from "react";
 import type { SparkSnapshot } from "../../api/types";
 import { isLlmMonitoringEnabled } from "../../api/sparkRole";
-import { updateSpark, refreshSparkMetric, addLlmPort, removeLlmPort } from "../../api/client";
+import {
+  updateSpark,
+  refreshSparkMetric,
+  addLlmPort,
+  removeLlmPort,
+} from "../../api/client";
 import { SparkHeader } from "./SparkHeader";
 import { SparkActions } from "./SparkActions";
 import { GpuPanel } from "./GpuPanel";
@@ -88,21 +93,25 @@ export function SparkPage({
   onEdit,
 }: SparkPageProps) {
   const { metrics } = spark;
-  const [disabledDevices, setDisabledDevices] = useState<string[]>(spark.disabledDevices || []);
-  const [disabledInterfaces, setDisabledInterfaces] = useState<string[]>(
-    spark.disabledInterfaces || []
+  const [disabledDevices, setDisabledDevices] = useState<string[]>(
+    spark.disabledDevices || [],
   );
-  const [llmPorts, setLlmPorts] = useState<number[]>(spark.llmPorts ?? [spark.llmPort ?? 8888]);
+  const [disabledInterfaces, setDisabledInterfaces] = useState<string[]>(
+    spark.disabledInterfaces || [],
+  );
+  const [llmPorts, setLlmPorts] = useState<number[]>(
+    spark.llmPorts ?? [spark.llmPort ?? 8888],
+  );
   const [storagePollDisabled, setStoragePollDisabled] = useState<boolean>(
-    spark.storagePollDisabled ?? false
+    spark.storagePollDisabled ?? false,
   );
   const [showAddPort, setShowAddPort] = useState(false);
   const [newPortDraft, setNewPortDraft] = useState("");
   const [resourcesOpen, setResourcesOpen] = useState(() =>
-    readSectionOpen(SECTION_OPEN_KEYS.resources, true)
+    readSectionOpen(SECTION_OPEN_KEYS.resources, true),
   );
   const [servicesOpen, setServicesOpen] = useState(() =>
-    readSectionOpen(SECTION_OPEN_KEYS.services, true)
+    readSectionOpen(SECTION_OPEN_KEYS.services, true),
   );
 
   const toggleResources = useCallback(() => {
@@ -146,7 +155,10 @@ export function SparkPage({
         // When disabling auto-refresh, do one manual refresh immediately
         if (disabled) {
           refreshSparkMetric(spark.id, "storage").catch((err) =>
-            console.error("Failed to refresh storage after disabling auto-refresh:", err)
+            console.error(
+              "Failed to refresh storage after disabling auto-refresh:",
+              err,
+            ),
           );
         }
       } catch (err) {
@@ -154,7 +166,7 @@ export function SparkPage({
         setStoragePollDisabled(!disabled); // revert
       }
     },
-    [spark.id]
+    [spark.id],
   );
 
   const handleAddPort = useCallback(async () => {
@@ -175,14 +187,17 @@ export function SparkPage({
     }
   }, [spark.id, newPortDraft, llmPorts]);
 
-  const handleRemovePort = useCallback(async (port: number) => {
-    try {
-      const result = await removeLlmPort(spark.id, port);
-      setLlmPorts(result.llmPorts);
-    } catch (err) {
-      console.error("Failed to remove LLM port:", err);
-    }
-  }, [spark.id]);
+  const handleRemovePort = useCallback(
+    async (port: number) => {
+      try {
+        const result = await removeLlmPort(spark.id, port);
+        setLlmPorts(result.llmPorts);
+      } catch (err) {
+        console.error("Failed to remove LLM port:", err);
+      }
+    },
+    [spark.id],
+  );
 
   const llmOn = isLlmMonitoringEnabled(spark);
   const comfyOn = Boolean(spark.comfyMonitoring);
@@ -190,8 +205,24 @@ export function SparkPage({
   /** First LLM + Comfy share a row when both are on. */
   const primarySideBySide = llmOn && comfyOn;
   const showServices = llmOn || comfyOn;
-  const primaryPort = llmPorts[0];
-  const extraPorts = llmPorts.slice(1);
+  // Configured ports plus the server's auto-discovered ones, with the port that
+  // is actually answering as primary — the headline card then follows whichever
+  // model is serving (a worker that moved 5215 → 5217 needs no config edit).
+  // Index alignment: the server probes configured ports first, then discovered.
+  const discoveredPorts = (spark.llmDiscoveredPorts ?? []).filter(
+    (port) => !llmPorts.includes(port),
+  );
+  const activePorts = [...llmPorts, ...discoveredPorts];
+  const activePortIndex = (port: number) => activePorts.indexOf(port);
+  const livePort = activePorts.find(
+    (port) => metrics.llm?.[activePortIndex(port)]?.available === true,
+  );
+  const orderedPorts =
+    livePort != null
+      ? [livePort, ...activePorts.filter((port) => port !== livePort)]
+      : activePorts;
+  const primaryPort = orderedPorts[0];
+  const extraPorts = orderedPorts.slice(1);
 
   /**
    * Extra LLM ports (after the primary):
@@ -204,9 +235,16 @@ export function SparkPage({
     return false;
   };
 
-  const renderLlmPanel = (port: number, portIndex: number, className?: string) => {
-    const llmMetrics = metrics.llm?.[portIndex] ?? null;
-    const canRemove = portIndex > 0;
+  const renderLlmPanel = (
+    port: number,
+    portIndex: number,
+    className?: string,
+  ) => {
+    // Position in the probe order, not in the (live-first) render order.
+    const llmMetrics = metrics.llm?.[activePortIndex(port)] ?? null;
+    const configured = llmPorts.includes(port);
+    // "Remove" edits llmPorts, which discovered ports are not part of.
+    const canRemove = configured && orderedPorts.indexOf(port) > 0;
     return (
       <LlmPanel
         key={port}
@@ -215,6 +253,7 @@ export function SparkPage({
         sparkName={spark.name}
         llmPort={port}
         llmPorts={llmPorts}
+        discovered={!configured}
         hasApiKey={Boolean(spark.llmApiKeyPorts?.includes(port))}
         shareImage={benchShareImage}
         onRemovePort={canRemove ? handleRemovePort : undefined}
@@ -224,7 +263,13 @@ export function SparkPage({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-page-gap)" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--density-page-gap)",
+      }}
+    >
       <SparkHeader spark={spark} onEdit={onEdit} />
       {/* Mobile-only action row (Update Hermes / Shutdown·Wake / Edit) — desktop keeps them in the header. */}
       <SparkActions
@@ -232,7 +277,10 @@ export function SparkPage({
         onEdit={onEdit}
         className="flex flex-wrap items-center justify-end gap-2 px-1 py-1 sm:hidden"
       />
-      <div className="spark-page grid grid-cols-1 md:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
+      <div
+        className="spark-page grid grid-cols-1 md:grid-cols-2"
+        style={{ gap: "var(--density-page-gap)" }}
+      >
         <SectionHeading
           title={t("Resources")}
           open={resourcesOpen}
@@ -259,7 +307,9 @@ export function SparkPage({
                     className={tailscaleOn ? "md:row-span-4" : "md:row-span-3"}
                   >
                     <p className="text-xs text-muted">
-                      {t("No NVIDIA GPU detected on this host (nvidia-smi is not available).")}
+                      {t(
+                        "No NVIDIA GPU detected on this host (nvidia-smi is not available).",
+                      )}
                     </p>
                   </Panel>
                 )}
@@ -283,11 +333,15 @@ export function SparkPage({
                   storagePollDisabled={storagePollDisabled}
                   onStoragePollModeChange={handleStoragePollModeChange}
                 />
-                {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
+                {tailscaleOn && (
+                  <TailscalePanel tailscale={metrics.tailscale ?? null} />
+                )}
                 {/* Component temperatures + fan speeds — real hardware hosts only
                     (the sensor sweep is gated on kind === "host" server-side). */}
                 <HardwarePanel
                   sensors={metrics.sensors}
+                  gpu={metrics.gpu}
+                  hardware={spark.hardware}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                   className="md:col-span-2"
@@ -317,7 +371,9 @@ export function SparkPage({
                   disabledInterfaces={disabledInterfaces}
                   onDisabledChange={setDisabledInterfaces}
                 />
-                {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
+                {tailscaleOn && (
+                  <TailscalePanel tailscale={metrics.tailscale ?? null} />
+                )}
               </>
             )}
           </>
@@ -344,7 +400,7 @@ export function SparkPage({
               renderLlmPanel(
                 primaryPort,
                 0,
-                primarySideBySide ? undefined : "md:col-span-2"
+                primarySideBySide ? undefined : "md:col-span-2",
               )}
             {comfyOn && (
               <ComfyPanel
@@ -360,8 +416,10 @@ export function SparkPage({
                 renderLlmPanel(
                   port,
                   j + 1,
-                  extraLlmFullWidth(j, extraPorts.length) ? "md:col-span-2" : undefined
-                )
+                  extraLlmFullWidth(j, extraPorts.length)
+                    ? "md:col-span-2"
+                    : undefined,
+                ),
               )}
             {llmOn &&
               (showAddPort ? (

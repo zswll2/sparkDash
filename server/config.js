@@ -6,26 +6,37 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 
 // ─── Spark config file path ──────────────────────────────
-const SPARKS_JSON_PATH = process.env.SPARKS_JSON_PATH || path.join(ROOT, "config", "sparks.json");
+const SPARKS_JSON_PATH =
+  process.env.SPARKS_JSON_PATH || path.join(ROOT, "config", "sparks.json");
 const GPU_MEMORY_JSON_PATH =
-  process.env.GPU_MEMORY_JSON_PATH || path.join(ROOT, "config", "gpu-memory.json");
+  process.env.GPU_MEMORY_JSON_PATH ||
+  path.join(ROOT, "config", "gpu-memory.json");
 /** Encrypted SSH password store (never served by API; lives on config volume). */
 const SPARKS_SECRETS_PATH =
-  process.env.SPARKS_SECRETS_PATH || path.join(ROOT, "config", "sparks-secrets.json");
+  process.env.SPARKS_SECRETS_PATH ||
+  path.join(ROOT, "config", "sparks-secrets.json");
 /** AES key file (auto-generated if SPARKDASH_SECRETS_KEY unset). */
 const SECRETS_KEY_PATH =
   process.env.SECRETS_KEY_PATH || path.join(ROOT, "config", ".secrets-key");
 /** Daily LLM tok/s rollups (gitignored). */
 const LLM_DAILY_JSON_PATH =
-  process.env.LLM_DAILY_JSON_PATH || path.join(ROOT, "config", "llm-daily.json");
+  process.env.LLM_DAILY_JSON_PATH ||
+  path.join(ROOT, "config", "llm-daily.json");
 /** Rolling fleet energy estimates (gitignored; written atomically at mode 0600). */
 const FLEET_ENERGY_JSON_PATH =
-  process.env.FLEET_ENERGY_JSON_PATH || path.join(ROOT, "config", "fleet-energy.json");
+  process.env.FLEET_ENERGY_JSON_PATH ||
+  path.join(ROOT, "config", "fleet-energy.json");
 
 // ─── LLM / Comfy probe timeouts ──────────────────────────
 const LLM_PROBE_TIMEOUT_MS = 3000;
-const COMFY_PROBE_TIMEOUT_MS = parseInt(process.env.COMFY_PROBE_TIMEOUT_MS || "3000", 10);
-const TAILSCALE_PROBE_TIMEOUT_MS = parseInt(process.env.TAILSCALE_PROBE_TIMEOUT_MS || "8000", 10);
+const COMFY_PROBE_TIMEOUT_MS = parseInt(
+  process.env.COMFY_PROBE_TIMEOUT_MS || "3000",
+  10,
+);
+const TAILSCALE_PROBE_TIMEOUT_MS = parseInt(
+  process.env.TAILSCALE_PROBE_TIMEOUT_MS || "8000",
+  10,
+);
 const SSH_CONNECT_TIMEOUT = 5; // seconds
 // Reuse one authenticated SSH connection per Spark instead of dialing a new one
 // for every collector tick. Set SSH_MULTIPLEX=0 to go back to one connection
@@ -40,29 +51,71 @@ const SSH_CONTROL_PERSIST = process.env.SSH_CONTROL_PERSIST || "300";
 // ─── Poll intervals (milliseconds) ───────────────────────
 const POLL_INTERVAL_GPU = parseInt(process.env.POLL_INTERVAL_GPU || "2000", 10);
 const POLL_INTERVAL_CPU = parseInt(process.env.POLL_INTERVAL_CPU || "2000", 10);
-const POLL_INTERVAL_NETWORK = parseInt(process.env.POLL_INTERVAL_NETWORK || "2000", 10);
-const POLL_INTERVAL_STORAGE = parseInt(process.env.POLL_INTERVAL_STORAGE || "5000", 10);
+const POLL_INTERVAL_NETWORK = parseInt(
+  process.env.POLL_INTERVAL_NETWORK || "2000",
+  10,
+);
+const POLL_INTERVAL_STORAGE = parseInt(
+  process.env.POLL_INTERVAL_STORAGE || "5000",
+  10,
+);
 const POLL_INTERVAL_LLM = parseInt(process.env.POLL_INTERVAL_LLM || "2000", 10);
-const POLL_INTERVAL_COMFY = parseInt(process.env.POLL_INTERVAL_COMFY || "2000", 10);
+// LLM worker auto-discovery: every listening port inside this range that answers
+// as an OpenAI-compatible server is probed and shown, so a worker that moves
+// (5215 → 5217) or a second model that appears is picked up with no config edit.
+// Explicit llmPorts stay authoritative and are always probed (a remote Spark
+// keeps 8888, outside the range). One `ss` exec per TTL per unit.
+const LLM_PORT_SCAN_ENABLED = (process.env.LLM_PORT_SCAN ?? "1") !== "0";
+const LLM_PORT_SCAN_START = parseInt(
+  process.env.LLM_PORT_SCAN_START || "5200",
+  10,
+);
+const LLM_PORT_SCAN_END = parseInt(process.env.LLM_PORT_SCAN_END || "5299", 10);
+const LLM_PORT_SCAN_TTL = parseInt(
+  process.env.LLM_PORT_SCAN_TTL || "60000",
+  10,
+);
+const POLL_INTERVAL_COMFY = parseInt(
+  process.env.POLL_INTERVAL_COMFY || "2000",
+  10,
+);
 // Board / NVMe / NIC / fan sensor inventory (temperatures + fan speeds).
 // Same cadence as the CPU loop: a fan ramp or a heatsink soak is visible
 // second-by-second, and the hardware panel is meant to be watched live.
-const POLL_INTERVAL_SENSORS = parseInt(process.env.POLL_INTERVAL_SENSORS || "2000", 10);
+const POLL_INTERVAL_SENSORS = parseInt(
+  process.env.POLL_INTERVAL_SENSORS || "2000",
+  10,
+);
 // Tailnet membership changes slowly; each poll is an SSH round-trip.
-const POLL_INTERVAL_TAILSCALE = parseInt(process.env.POLL_INTERVAL_TAILSCALE || "30000", 10);
+const POLL_INTERVAL_TAILSCALE = parseInt(
+  process.env.POLL_INTERVAL_TAILSCALE || "30000",
+  10,
+);
 // Kernel journal scan for NV_ERR_NO_MEMORY — not on the 2s GPU loop.
-const POLL_INTERVAL_NVERR = parseInt(process.env.POLL_INTERVAL_NVERR || "60000", 10);
+const POLL_INTERVAL_NVERR = parseInt(
+  process.env.POLL_INTERVAL_NVERR || "60000",
+  10,
+);
 // dmon -c 1 -d 1 blocks ~1s; default 2s avoids stacking with in-flight guards
-const POLL_INTERVAL_BANDWIDTH = parseInt(process.env.POLL_INTERVAL_BANDWIDTH || "2000", 10);
+const POLL_INTERVAL_BANDWIDTH = parseInt(
+  process.env.POLL_INTERVAL_BANDWIDTH || "2000",
+  10,
+);
 // Dedicated liveness (sshTest / local ping) cadence — not a metric domain.
-const POLL_INTERVAL_LIVENESS = parseInt(process.env.POLL_INTERVAL_LIVENESS || "5000", 10);
+const POLL_INTERVAL_LIVENESS = parseInt(
+  process.env.POLL_INTERVAL_LIVENESS || "5000",
+  10,
+);
 // Hermes Agent update check cadence. `hermes update --check` runs `git fetch`
 // on the target every time, so keep it slow (default 10 min).
-const POLL_INTERVAL_HERMES = parseInt(process.env.POLL_INTERVAL_HERMES || "600000", 10);
+const POLL_INTERVAL_HERMES = parseInt(
+  process.env.POLL_INTERVAL_HERMES || "600000",
+  10,
+);
 // Hard cap while running `hermes update` over SSH (repo pull + dep reinstall).
 const HERMES_UPDATE_TIMEOUT_MS = parseInt(
   process.env.HERMES_UPDATE_TIMEOUT_MS || "600000",
-  10
+  10,
 );
 
 // ─── Port ────────────────────────────────────────────────
@@ -132,6 +185,10 @@ export {
   POLL_INTERVAL_BANDWIDTH,
   POLL_INTERVAL_LIVENESS,
   POLL_INTERVAL_HERMES,
+  LLM_PORT_SCAN_ENABLED,
+  LLM_PORT_SCAN_START,
+  LLM_PORT_SCAN_END,
+  LLM_PORT_SCAN_TTL,
   HERMES_UPDATE_TIMEOUT_MS,
   PORT,
   LLM_PORT,

@@ -9,8 +9,12 @@ import { ComfyProbe } from "../collectors/ComfyProbe.js";
 import { HermesProbe } from "../collectors/HermesProbe.js";
 import { TailscaleProbe } from "../collectors/TailscaleProbe.js";
 import { llmDaily } from "../collectors/LlmDaily.js";
-import { sshExec } from "../collectors/ssh.js";
+import { discoverLlmPorts, sshExec } from "../collectors/ssh.js";
 import {
+  LLM_PORT_SCAN_ENABLED,
+  LLM_PORT_SCAN_START,
+  LLM_PORT_SCAN_END,
+  LLM_PORT_SCAN_TTL,
   POLL_INTERVAL_GPU,
   POLL_INTERVAL_CPU,
   POLL_INTERVAL_NETWORK,
@@ -40,20 +44,30 @@ export class SparkMonitor {
    */
   constructor(spark, options = {}) {
     this.spark = spark;
-    this._onWolMac = typeof options.onWolMac === "function" ? options.onWolMac : null;
+    this._onWolMac =
+      typeof options.onWolMac === "function" ? options.onWolMac : null;
     this._onHermesChange =
-      typeof options.onHermesChange === "function" ? options.onHermesChange : null;
+      typeof options.onHermesChange === "function"
+        ? options.onHermesChange
+        : null;
     // Resolver for worker derived label: maps a head spark id to its live
     // LLM model id (or null when unknown). Wired by index.js from the monitor
     // map; never writes back to registry config (derived display only).
     this._resolveHeadModelId =
-      typeof options.resolveHeadModelId === "function" ? options.resolveHeadModelId : null;
+      typeof options.resolveHeadModelId === "function"
+        ? options.resolveHeadModelId
+        : null;
     this.collector = new SystemCollector(spark);
 
-    // One LlmProbe per port — none when LLM monitoring is off
+    // One LlmProbe per port — none when LLM monitoring is off. Ports found by
+    // auto-discovery (state below) join this map on the fly.
     this.llmProbes = new Map();
+    /** Ports found by auto-discovery (not in llmPorts); display-only. */
+    this._discoveredPorts = [];
+    this._llmScanAt = 0;
+    this._llmScanInFlight = false;
     if (this._llmMonitoringEnabled(spark)) {
-      for (const port of this._llmPorts()) {
+      for (const port of this._activeLlmPorts()) {
         this.llmProbes.set(port, new LlmProbe(spark, port));
       }
     }
@@ -157,21 +171,7 @@ export class SparkMonitor {
     this.collector.spark = spark;
 
     // Rebuild LLM probe map — add new ports, remove stale ones, update existing
-    const ports = this._llmMonitoringEnabled() ? this._llmPorts() : [];
-    const prevProbes = this.llmProbes;
-    this.llmProbes = new Map();
-    for (const port of ports) {
-      const existing = prevProbes.get(port);
-      if (existing) {
-        existing.spark = spark;
-        this.llmProbes.set(port, existing);
-      } else {
-        this.llmProbes.set(port, new LlmProbe(spark, port));
-      }
-    }
-    if (!this._llmMonitoringEnabled()) {
-      this._metrics.llm = [];
-    }
+    this._rebuildLlmProbes(spark);
 
     // ComfyUI probe — create / update / clear
     if (this._comfyMonitoringEnabled()) {
@@ -278,7 +278,8 @@ export class SparkMonitor {
     const spark = this.spark || {};
     const role = spark.role || (spark.workerNode ? "worker" : "standalone");
     if (role !== "worker") return null;
-    const headId = typeof spark.workerHeadId === "string" ? spark.workerHeadId.trim() : "";
+    const headId =
+      typeof spark.workerHeadId === "string" ? spark.workerHeadId.trim() : "";
     if (!headId || headId === spark.id) return null;
     if (typeof this._resolveHeadModelId !== "function") return null;
     let model = null;
@@ -294,11 +295,16 @@ export class SparkMonitor {
   _restartLlmPollInterval() {
     if (this._llmIntervalId != null) {
       clearInterval(this._llmIntervalId);
-      this._intervals = this._intervals.filter((id) => id !== this._llmIntervalId);
+      this._intervals = this._intervals.filter(
+        (id) => id !== this._llmIntervalId,
+      );
       this._llmIntervalId = null;
     }
     if (this._llmMonitoringEnabled() && this._running) {
-      this._llmIntervalId = setInterval(() => this._pollDomain("llm"), POLL_INTERVAL_LLM);
+      this._llmIntervalId = setInterval(
+        () => this._pollDomain("llm"),
+        POLL_INTERVAL_LLM,
+      );
       this._intervals.push(this._llmIntervalId);
       void this._pollDomain("llm");
     }
@@ -323,11 +329,16 @@ export class SparkMonitor {
   _restartComfyPollInterval() {
     if (this._comfyIntervalId != null) {
       clearInterval(this._comfyIntervalId);
-      this._intervals = this._intervals.filter((id) => id !== this._comfyIntervalId);
+      this._intervals = this._intervals.filter(
+        (id) => id !== this._comfyIntervalId,
+      );
       this._comfyIntervalId = null;
     }
     if (this._comfyMonitoringEnabled() && this._running) {
-      this._comfyIntervalId = setInterval(() => this._pollDomain("comfy"), POLL_INTERVAL_COMFY);
+      this._comfyIntervalId = setInterval(
+        () => this._pollDomain("comfy"),
+        POLL_INTERVAL_COMFY,
+      );
       this._intervals.push(this._comfyIntervalId);
       void this._pollDomain("comfy");
     }
@@ -345,13 +356,15 @@ export class SparkMonitor {
   _restartTailscalePollInterval() {
     if (this._tailscaleIntervalId != null) {
       clearInterval(this._tailscaleIntervalId);
-      this._intervals = this._intervals.filter((id) => id !== this._tailscaleIntervalId);
+      this._intervals = this._intervals.filter(
+        (id) => id !== this._tailscaleIntervalId,
+      );
       this._tailscaleIntervalId = null;
     }
     if (this._tailscaleMonitoringEnabled() && this._running) {
       this._tailscaleIntervalId = setInterval(
         () => this._pollDomain("tailscale"),
-        POLL_INTERVAL_TAILSCALE
+        POLL_INTERVAL_TAILSCALE,
       );
       this._intervals.push(this._tailscaleIntervalId);
       void this._pollDomain("tailscale");
@@ -370,13 +383,15 @@ export class SparkMonitor {
   _restartHermesPollInterval() {
     if (this._hermesIntervalId != null) {
       clearInterval(this._hermesIntervalId);
-      this._intervals = this._intervals.filter((id) => id !== this._hermesIntervalId);
+      this._intervals = this._intervals.filter(
+        (id) => id !== this._hermesIntervalId,
+      );
       this._hermesIntervalId = null;
     }
     if (this._hermesMonitoringEnabled() && this._running) {
       this._hermesIntervalId = setInterval(
         () => this._pollDomain("hermes"),
-        POLL_INTERVAL_HERMES
+        POLL_INTERVAL_HERMES,
       );
       this._intervals.push(this._hermesIntervalId);
       void this._pollDomain("hermes");
@@ -398,6 +413,80 @@ export class SparkMonitor {
     return [LLM_PORT];
   }
 
+  /** Configured ports first, then auto-discovered ones (deduped). */
+  _activeLlmPorts() {
+    const configured = this._llmPorts();
+    const extra = (this._discoveredPorts || []).filter(
+      (p) => !configured.includes(p),
+    );
+    return [...configured, ...extra];
+  }
+
+  /**
+   * (Re)build the per-port probe map from the active port list, reusing existing
+   * probe objects so error counters / detection state survive a port change.
+   */
+  _rebuildLlmProbes(spark = this.spark) {
+    const ports = this._llmMonitoringEnabled(spark)
+      ? this._activeLlmPorts()
+      : [];
+    const prevProbes = this.llmProbes;
+    const next = new Map();
+    for (const port of ports) {
+      const existing = prevProbes.get(port);
+      if (existing) {
+        existing.spark = spark;
+        next.set(port, existing);
+      } else {
+        next.set(port, new LlmProbe(spark, port));
+      }
+    }
+    this.llmProbes = next;
+    if (!this._llmMonitoringEnabled(spark)) {
+      this._metrics.llm = [];
+    }
+    return ports;
+  }
+
+  /** Auto-discovery: global switch AND this unit's llmMonitoring AND opt-out. */
+  _llmPortScanEnabled(spark = this.spark) {
+    return (
+      LLM_PORT_SCAN_ENABLED &&
+      this._llmMonitoringEnabled(spark) &&
+      spark?.llmPortScan !== false
+    );
+  }
+
+  /**
+   * Refresh the discovered-port set at most once per TTL. Never throws and never
+   * clears the previous set on failure — a transient SSH error must not blank
+   * the LLM card. Runs before the probe so a moved port is visible this round.
+   */
+  async _maybeScanLlmPorts() {
+    if (!this._llmPortScanEnabled() || this._llmScanInFlight) return;
+    const now = Date.now();
+    if (now - this._llmScanAt < LLM_PORT_SCAN_TTL) return;
+    this._llmScanAt = now;
+    this._llmScanInFlight = true;
+    const runGeneration = this._runGeneration;
+    try {
+      const found = await discoverLlmPorts(this.spark, {
+        start: LLM_PORT_SCAN_START,
+        end: LLM_PORT_SCAN_END,
+      });
+      if (!this._running || this._runGeneration !== runGeneration) return;
+      const changed =
+        found.length !== this._discoveredPorts.length ||
+        found.some((port, i) => port !== this._discoveredPorts[i]);
+      this._discoveredPorts = found;
+      if (changed) this._rebuildLlmProbes();
+    } catch {
+      /* keep the previous set */
+    } finally {
+      this._llmScanInFlight = false;
+    }
+  }
+
   /** Start background polling. */
   start() {
     if (this._running) return;
@@ -405,24 +494,40 @@ export class SparkMonitor {
     this._running = true;
     this._stopped = false;
     this._poll();
-    this._intervals.push(setInterval(() => this._pollDomain("gpu"), POLL_INTERVAL_GPU));
-    this._intervals.push(setInterval(() => this._pollDomain("cpu"), POLL_INTERVAL_CPU));
-    this._intervals.push(setInterval(() => this._pollDomain("network"), POLL_INTERVAL_NETWORK));
-    this._intervals.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
-    this._intervals.push(setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU));
-    this._intervals.push(setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH));
+    this._intervals.push(
+      setInterval(() => this._pollDomain("gpu"), POLL_INTERVAL_GPU),
+    );
+    this._intervals.push(
+      setInterval(() => this._pollDomain("cpu"), POLL_INTERVAL_CPU),
+    );
+    this._intervals.push(
+      setInterval(() => this._pollDomain("network"), POLL_INTERVAL_NETWORK),
+    );
+    this._intervals.push(
+      setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE),
+    );
+    this._intervals.push(
+      setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU),
+    );
+    this._intervals.push(
+      setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH),
+    );
     // Hardware sensors (board/NVMe/NIC temps + fans) only exist on real
     // hardware hosts — a DGX Spark board and a hypervisor guest both lack the
     // chips, so polling them there would spend an SSH login per tick on nothing.
     if (this.spark.kind === "host") {
-      this._intervals.push(setInterval(() => this._pollDomain("sensors"), POLL_INTERVAL_SENSORS));
+      this._intervals.push(
+        setInterval(() => this._pollDomain("sensors"), POLL_INTERVAL_SENSORS),
+      );
     }
     this._restartLlmPollInterval();
     this._restartComfyPollInterval();
     this._restartHermesPollInterval();
     this._restartTailscalePollInterval();
     // Liveness on a slightly slower cadence
-    this._intervals.push(setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS));
+    this._intervals.push(
+      setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS),
+    );
     console.log(`[SparkMonitor] ${this.spark.id} started`);
   }
 
@@ -467,7 +572,8 @@ export class SparkMonitor {
       disabledInterfaces: this.spark.disabledInterfaces || [],
       storagePollDisabled: Boolean(this.spark.storagePollDisabled),
       workerNode: Boolean(this.spark.workerNode),
-      role: this.spark.role || (this.spark.workerNode ? "worker" : "standalone"),
+      role:
+        this.spark.role || (this.spark.workerNode ? "worker" : "standalone"),
       workerLabel: this.spark.workerLabel || null,
       workerHeadId: this.spark.workerHeadId || null,
       // Derived display label (head model mirror). Raw workerLabel above is
@@ -476,6 +582,9 @@ export class SparkMonitor {
       llmMonitoring: this._llmMonitoringEnabled(),
       llmPort: ports[0] ?? LLM_PORT,
       llmPorts: ports,
+      /** Auto-discovery: lets the UI badge ports it did not configure. */
+      llmPortScan: this._llmPortScanEnabled(),
+      llmDiscoveredPorts: [...this._discoveredPorts],
       llmApiKeyPorts: Array.isArray(this.spark.llmApiKeyPorts)
         ? this.spark.llmApiKeyPorts
         : Object.keys(this.spark.llmApiKeys || {})
@@ -559,7 +668,10 @@ export class SparkMonitor {
       this._uptimeSeconds = uptimeSeconds;
     } catch {
       if (!isCurrentRun()) return;
-      if (!this.lastOnlineOk || Date.now() - this.lastOnlineOk > ONLINE_GRACE_MS) {
+      if (
+        !this.lastOnlineOk ||
+        Date.now() - this.lastOnlineOk > ONLINE_GRACE_MS
+      ) {
         this.online = false;
         this._uptimeSeconds = null;
       }
@@ -628,16 +740,21 @@ export class SparkMonitor {
           result = await this.collector.collectSensors();
           break;
         case "llm":
+          // Auto-discovery first (TTL-cached, best-effort) so a worker that
+          // moved to a new port is already in the map for this round.
+          await this._maybeScanLlmPorts();
           // Probe all ports in parallel
           result = await Promise.all(
-            Array.from(this.llmProbes.values()).map((probe) => probe.probe())
+            Array.from(this.llmProbes.values()).map((probe) => probe.probe()),
           );
           break;
         case "comfy":
           result = this.comfyProbe ? await this.comfyProbe.probe() : null;
           break;
         case "tailscale":
-          result = this.tailscaleProbe ? await this.tailscaleProbe.probe() : null;
+          result = this.tailscaleProbe
+            ? await this.tailscaleProbe.probe()
+            : null;
           break;
         case "hermes":
           result = this.hermesProbe ? await this.hermesProbe.check() : null;
@@ -652,11 +769,13 @@ export class SparkMonitor {
       switch (domain) {
         case "gpu":
           this._metrics.gpu = result;
-          this._metricCollectionSuccessful.gpu = collectionWasSuccessful(result);
+          this._metricCollectionSuccessful.gpu =
+            collectionWasSuccessful(result);
           break;
         case "cpu":
           this._metrics.cpu = result;
-          this._metricCollectionSuccessful.cpu = collectionWasSuccessful(result);
+          this._metricCollectionSuccessful.cpu =
+            collectionWasSuccessful(result);
           break;
         case "ram":
           this._metrics.ram = result;
@@ -667,7 +786,10 @@ export class SparkMonitor {
             try {
               this._onWolMac(this.spark.id, result.wolMac);
             } catch (err) {
-              console.error(`[SparkMonitor] ${this.spark.id} wolMac persist error:`, err.message);
+              console.error(
+                `[SparkMonitor] ${this.spark.id} wolMac persist error:`,
+                err.message,
+              );
             }
           }
           break;
@@ -686,7 +808,16 @@ export class SparkMonitor {
             const probes = Array.from(this.llmProbes.values());
             for (let i = 0; i < result.length; i++) {
               const probe = probes[i];
-              if (probe) llmDaily.record(this.spark.id, probe.port, result[i]);
+              if (!probe) continue;
+              // Probe snapshots carry no port of their own; the UI needs the
+              // port and whether it came from auto-discovery (badge).
+              if (result[i] && typeof result[i] === "object") {
+                result[i].port = probe.port;
+                result[i].discovered = this._discoveredPorts.includes(
+                  probe.port,
+                );
+              }
+              llmDaily.record(this.spark.id, probe.port, result[i]);
             }
           }
           break;
@@ -709,7 +840,10 @@ export class SparkMonitor {
       ) {
         this._metricCollectionSuccessful[domain] = false;
       }
-      console.error(`[SparkMonitor] ${this.spark.id} ${domain} poll error:`, err.message);
+      console.error(
+        `[SparkMonitor] ${this.spark.id} ${domain} poll error:`,
+        err.message,
+      );
     } finally {
       if (this._inflight[domain] === pollToken) {
         this._inflight[domain] = false;
@@ -730,7 +864,10 @@ export class SparkMonitor {
       this._metrics.storage = result;
       this._lastUpdate[domain] = Date.now();
     } catch (err) {
-      console.error(`[SparkMonitor] ${this.spark.id} ${domain} refresh error:`, err.message);
+      console.error(
+        `[SparkMonitor] ${this.spark.id} ${domain} refresh error:`,
+        err.message,
+      );
     } finally {
       if (this._inflight[domain] === refreshToken) {
         this._inflight[domain] = false;
@@ -776,7 +913,10 @@ export class SparkMonitor {
    */
   runHermesUpdate() {
     if (!this.hermesProbe) {
-      return { started: false, reason: "Hermes Agent monitoring is disabled for this Spark" };
+      return {
+        started: false,
+        reason: "Hermes Agent monitoring is disabled for this Spark",
+      };
     }
     if (this._hermes.status === "running") {
       return { started: false, reason: "An update is already running" };
@@ -824,7 +964,8 @@ export class SparkMonitor {
           this._hermes = {
             ...this._hermes,
             status: "error",
-            error: res?.error || res?.output?.slice(-400) || "hermes update failed",
+            error:
+              res?.error || res?.output?.slice(-400) || "hermes update failed",
             finishedAt: res?.finishedAt ?? Date.now(),
           };
         }
@@ -847,7 +988,10 @@ export class SparkMonitor {
     try {
       this._onHermesChange(this.spark.id);
     } catch (err) {
-      console.error(`[SparkMonitor] ${this.spark.id} hermes change error:`, err.message);
+      console.error(
+        `[SparkMonitor] ${this.spark.id} hermes change error:`,
+        err.message,
+      );
     }
   }
 

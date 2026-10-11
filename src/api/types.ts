@@ -158,7 +158,11 @@ export interface HermesUpdatesResponse {
   /** Installed hermes version on this Spark (e.g. "0.20.0"), when known. */
   installedVersion: string | null;
   /** Pending commits from git (may be null if the repo can't be read). */
-  pending: { count: number; headSha: string | null; commits: HermesPendingCommit[] } | null;
+  pending: {
+    count: number;
+    headSha: string | null;
+    commits: HermesPendingCommit[];
+  } | null;
 }
 
 // ─── Hardware info ───────────────────────────────────────
@@ -170,6 +174,13 @@ export interface HardwareInfo {
   gpuChip: string | null;
   cudaDriver: string | null;
   storageModel: string | null;
+  /** DMI vendor of the machine (`QEMU`/`KVM` inside a hypervisor guest). */
+  virtualized?: string | null;
+  /**
+   * A GPU is visible inside a virtual machine, so the physical card must have
+   * been passed through to it (PCIe passthrough).
+   */
+  gpuPassthrough?: boolean;
 }
 
 // ─── GPU metrics ─────────────────────────────────────────
@@ -326,6 +337,10 @@ export interface SensorMetrics {
 // ─── LLM metrics ─────────────────────────────────────────
 export interface LlmMetrics {
   available: boolean;
+  /** TCP port this entry was probed on (set per entry server-side). */
+  port?: number;
+  /** True when the port came from auto-discovery rather than llmPorts. */
+  discovered?: boolean;
   backend: "vllm" | "llama.cpp" | "sglang" | "ds4" | "exl3" | "q27" | null;
   modelId: string | null;
   modelPath: string | null;
@@ -550,6 +565,13 @@ export interface SparkSnapshot {
   llmPort: number;
   /** All LLM server ports configured for this Spark */
   llmPorts: number[];
+  /**
+   * Ports found by the server's auto-discovery (listening ports that answer as
+   * an LLM server). Display-only — never part of the registry config.
+   */
+  llmDiscoveredPorts?: number[];
+  /** Whether LLM port auto-discovery is active for this unit. */
+  llmPortScan?: boolean;
   /** Ports with a stored LLM API key (key itself never exposed) */
   llmApiKeyPorts?: number[];
   /** Whether ComfyUI is probed (opt-in; all roles) */
