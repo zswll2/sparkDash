@@ -19,6 +19,9 @@ const SGLANG_MODEL_INFO_PATHS = ["/model_info", "/get_model_info"];
  * expire back to 0 if it stops changing.
  */
 const SGLANG_STICKY_TPS_LIVE_MS = 6_000;
+// How long an in-flight bridge may keep repeating an engine rate that stopped
+// changing. Beyond this the value is history, not a measurement.
+const SGLANG_STICKY_TPS_MAX_MS = 10_000;
 
 /**
  * Prefer a short model id when the server returns a Hugging Face hub cache path.
@@ -123,6 +126,12 @@ export class LlmProbe {
     this._lastDetectAt = 0;
     /** @type {{ value: number, liveUntil: number } | null} */
     this._sglangStickyTps = null;
+    /** Live per-step decode tok/s as reported by the engine itself (null when absent). */
+    this._sglangLiveTps = null;
+    /** Last seen sglang:num_requests_total — a bump means a request finished. */
+    this._sglangRequestsTotal = null;
+    /** False until the Prometheus counters have a baseline (the first poll must not seed a rate). */
+    this._sglangCountersSeeded = false;
     /** Whether this poll's /server_info carried total_input/output_tokens. */
     this._sglangTotalsPolled = false;
     /**
@@ -268,6 +277,9 @@ export class LlmProbe {
     this.lastTtftCount = null;
     this.lastIterSum = null;
     this._sglangStickyTps = null;
+    this._sglangLiveTps = null;
+    this._sglangRequestsTotal = null;
+    this._sglangCountersSeeded = false;
   }
 
   /** Note auth from an HTTP status on an unauthenticated probe request. */
@@ -986,9 +998,15 @@ export class LlmProbe {
       }
     }
 
-    // No cumulative counters — sticky last_gen_throughput only while it moves,
-    // unless /v1/loads (or /get_load) says requests are in flight.
+    // No cumulative counters in this build — the engine's own per-step throughput
+    // is the live number. Remember it: on builds whose Prometheus token counters
+    // only flush when a request finishes, those deltas must not override it.
     const lastGen = LlmProbe._sglangLastGenThroughput(sgData);
+    // Only a positive value is a signal: SGLang keeps the last decode rate after
+    // the batch drains, and a build that reports 0 while the counters advance is
+    // better served by the counter path below (_sglangStickyThroughput zeroes a
+    // frozen value once nothing is in flight).
+    this._sglangLiveTps = Number.isFinite(lastGen) && lastGen > 0 ? lastGen : null;
     this.generationTps = this._sglangStickyThroughput(lastGen, this._sglangInflight());
   }
 
@@ -1096,6 +1114,7 @@ export class LlmProbe {
       this._sglangStickyTps = {
         value: rounded,
         liveUntil: inflight && rounded > 0 ? now + SGLANG_STICKY_TPS_LIVE_MS : 0,
+        changedAt: now,
       };
       return inflight && rounded > 0 ? rounded : 0;
     }
@@ -1104,6 +1123,7 @@ export class LlmProbe {
       this._sglangStickyTps = {
         value: rounded,
         liveUntil: now + SGLANG_STICKY_TPS_LIVE_MS,
+        changedAt: now,
       };
       return rounded;
     }
@@ -1111,7 +1131,10 @@ export class LlmProbe {
     if (prev.liveUntil > now) {
       return rounded;
     }
-    if (inflight && rounded > 0) {
+    // In flight bridges the gap between engine updates — but only for a while:
+    // parked or abandoned batches keep "running" for hours on some engines.
+    const changedAt = prev.changedAt ?? 0;
+    if (inflight && rounded > 0 && now - changedAt <= SGLANG_STICKY_TPS_MAX_MS) {
       return rounded;
     }
     return 0;
@@ -1161,12 +1184,30 @@ export class LlmProbe {
     const prompt =
       this._getPromMetric(txt, "sglang:prompt_tokens_total") ??
       this._getPromMetric(txt, "sglang_prompt_tokens_total");
+    // Live per-step rate: the engine's gauge (or the JSON field from
+    // _applySglangServerInfo). A counter delta cannot contradict it by orders of
+    // magnitude without being a finished request's whole token count.
+    const liveGauge =
+      this._getPromMetric(txt, "sglang:gen_throughput") ??
+      this._getPromMetric(txt, "sglang_gen_throughput");
+    const liveRate =
+      this._sglangLiveTps ?? (liveGauge != null && liveGauge > 0 ? liveGauge : null);
+
+    // A bump in the finished-request counter means the token counters below
+    // include a whole request: on several SGLang builds (VM100 5217 confirmed)
+    // they only advance at completion, so the delta is a total, not a rate.
+    const requestsTotal =
+      this._getPromMetric(txt, "sglang:num_requests_total") ??
+      this._getPromMetric(txt, "sglang_num_requests_total");
+    const sawCompletion =
+      requestsTotal != null && this._sglangRequestsTotal != null && requestsTotal > this._sglangRequestsTotal;
+    if (requestsTotal != null) this._sglangRequestsTotal = requestsTotal;
+
     if (gen == null) {
-      const gauge =
-        this._getPromMetric(txt, "sglang:gen_throughput") ??
-        this._getPromMetric(txt, "sglang_gen_throughput");
-      if (gauge != null) {
-        this.generationTps = Math.max(0, Math.round(gauge * 100) / 100);
+      if (liveRate != null) {
+        this.generationTps = this._sglangStickyThroughput(liveRate, this._sglangInflight());
+      } else if (liveGauge != null) {
+        this.generationTps = Math.max(0, Math.round(liveGauge * 100) / 100);
       }
       return;
     }
@@ -1174,7 +1215,7 @@ export class LlmProbe {
     // Difference only against our own baseline; after a server-info hand-off
     // the first sample seeds instead of reporting the gap between two series.
     const ownsBaseline = this._sglangTokenSource !== "server_info";
-    if (ownsBaseline && dtSec > 0 && dtSec < 10) {
+    if (ownsBaseline && this._sglangCountersSeeded && !sawCompletion && dtSec > 0 && dtSec < 10) {
       const deltaOut = gen - this.lastTokenCounts.output;
       this.generationTps = Math.max(0, Math.round((deltaOut / dtSec) * 100) / 100);
       if (prompt != null) {
@@ -1184,13 +1225,22 @@ export class LlmProbe {
         this.prefillTps = 0;
       }
     }
+    if (liveRate != null) {
+      this.generationTps = this._sglangStickyThroughput(liveRate, this._sglangInflight());
+    } else if (sawCompletion) {
+      // Every counter moved because a request finished: nothing here says what
+      // the engine is doing right now, so report idle rather than a fake rate.
+      this.generationTps = this._sglangStickyThroughput(null, this._sglangInflight());
+      this.prefillTps = 0;
+    }
     // Seed outside the rate window too: on the first poll after a restart the
     // window is unusable, and a stale 0 baseline would turn the engine's
     // lifetime prompt counter into a rate on the next poll (#99).
     this.lastTokenCounts.output = gen;
     if (prompt != null) this.lastTokenCounts.input = prompt;
-    this._sglangTokenSource = "prometheus";
+    this._sglangTokenSource = liveRate != null ? "sglang-live" : "prometheus";
     this.totalOutputTokens = gen;
+    this._sglangCountersSeeded = true;
 
     const running =
       this._getPromMetric(txt, "sglang:num_running_reqs") ??
@@ -1200,8 +1250,11 @@ export class LlmProbe {
       this.slotsActive = Math.round(running);
     }
 
+    // The cached/uncached split comes from the same bursty counters: only publish
+    // it for a window in which no request finished, otherwise a single completed
+    // request would show up as a prefill rate of its whole prompt.
     const cached = this._sglangCachedTokens(txt);
-    if (cached != null && prompt != null) {
+    if (!sawCompletion && cached != null && prompt != null) {
       this._setPrefillSplitRates(cached, prompt, dtSec);
     }
   }
@@ -1214,8 +1267,14 @@ export class LlmProbe {
     const prompt =
       this._getPromMetric(txt, "sglang:prompt_tokens_total") ??
       this._getPromMetric(txt, "sglang_prompt_tokens_total");
+    const requestsTotal =
+      this._getPromMetric(txt, "sglang:num_requests_total") ??
+      this._getPromMetric(txt, "sglang_num_requests_total");
+    const sawCompletion =
+      requestsTotal != null && this._sglangRequestsTotal != null && requestsTotal > this._sglangRequestsTotal;
+    if (requestsTotal != null) this._sglangRequestsTotal = requestsTotal;
     const cached = this._sglangCachedTokens(txt);
-    if (cached != null && prompt != null) {
+    if (!sawCompletion && cached != null && prompt != null) {
       this._setPrefillSplitRates(cached, prompt, dtSec);
     }
   }
