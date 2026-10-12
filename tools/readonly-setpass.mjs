@@ -42,21 +42,39 @@ function hash(password) {
   };
 }
 
-function write(record, plaintextPath = null) {
+/**
+ * Store the credential. The plaintext file (when one is requested) is written and
+ * read back BEFORE the hash is stored: writing the hash first can leave a
+ * credential nobody can use — the server reports "configured" while no human
+ * holds the password. Ordering is the whole point of this function.
+ */
+function write(password, { plaintextPath = null } = {}) {
+  if (plaintextPath) {
+    mkdirSync(path.dirname(plaintextPath), { recursive: true });
+    writeFileSync(plaintextPath, `${password}\n`, { mode: 0o600 });
+    const back = readFileSync(plaintextPath, "utf8").trim();
+    if (back !== password) {
+      throw new Error(`read-back of ${plaintextPath} did not match — refusing to store the hash`);
+    }
+  }
+  const record = hash(password);
   mkdirSync(path.dirname(TARGET), { recursive: true });
   writeFileSync(TARGET, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
   try {
     const mode = statSync(TARGET).mode & 0o777;
     if (mode & 0o077) {
-      console.error(`WARNING: ${TARGET} is ${mode.toString(8).padStart(3, "0")} (want 600) — the server will refuse to unlock with it.`);
+      console.error(
+        `WARNING: ${TARGET} is ${mode.toString(8).padStart(3, "0")} (want 600) — the server will refuse to unlock with it.`
+      );
     }
   } catch {
     /* ignore */
   }
   console.log(`Unlock credential written: ${TARGET} (mode 0600) at ${record.updatedAt}`);
   if (plaintextPath) {
-    writeFileSync(plaintextPath, "", { mode: 0o600 });
-    console.log(`Plaintext written to: ${plaintextPath} (mode 0600) — read it with:`);
+    console.log(
+      `Plaintext written to: ${plaintextPath} (mode 0600, ${password.length} chars) — read it with:`
+    );
     console.log(`  cat ${plaintextPath}`);
     console.log("Delete that file once you have it stored somewhere safe.");
   }
@@ -123,7 +141,7 @@ if (typeof fromFile === "string") {
     console.error(`Password in ${fromFile} is shorter than ${MIN_LENGTH} characters.`);
     process.exit(1);
   }
-  write(hash(password));
+  write(password);
   console.log(`Remember to delete ${fromFile}.`);
   process.exit(0);
 }
@@ -136,7 +154,7 @@ if (argv.includes("--generate")) {
   const plaintextFlag = flag("--plaintext-file");
   const plaintextPath =
     typeof plaintextFlag === "string" ? plaintextFlag : path.join(ROOT, "config", "readonly-password.txt");
-  write(hash(password), plaintextPath);
+  write(password, { plaintextPath });
   process.exit(0);
 }
 
@@ -155,4 +173,4 @@ if (password.length < MIN_LENGTH) {
   console.error(`Unlock password must be at least ${MIN_LENGTH} characters.`);
   process.exit(1);
 }
-write(hash(password));
+write(password);
