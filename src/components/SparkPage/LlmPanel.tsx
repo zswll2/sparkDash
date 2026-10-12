@@ -14,6 +14,7 @@ import { PrefillBenchDialog } from "./PrefillBenchDialog";
 import { LlmDailyChart } from "./LlmDailyChart";
 import { parseLlmTargetInput } from "../../shared/llmTarget.js";
 import { LlmTrendChart } from "./LlmTrendChart";
+import { LlmTerminal } from "./LlmTerminal";
 import { t } from "../../i18n";
 
 interface LlmPanelProps {
@@ -447,6 +448,8 @@ export function LlmPanel({
     [uncachedFull],
   );
   const [showSettings, setShowSettings] = useState(false);
+  /** Live log of the samples — off until the operator asks for it. */
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [portDraft, setPortDraft] = useState(String(llmPort));
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
@@ -593,6 +596,20 @@ export function LlmPanel({
               <span>{t("Remove")}</span>
             </button>
           )}
+          <button
+            type="button"
+            title={t("Live terminal — one line per sample, decode and prefill tok/s")}
+            onClick={() => setTerminalOpen((open) => !open)}
+            aria-pressed={terminalOpen}
+            className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors hover:bg-surface-hover ${
+              terminalOpen ? "bg-surface-elevated text-accent" : "text-muted"
+            }`}
+          >
+            <span aria-hidden className="font-mono leading-none">
+              &gt;_
+            </span>
+            <span>{t("Terminal")}</span>
+          </button>
           <button
             type="button"
             title={showSettings ? t("Done") : t("LLM settings")}
@@ -742,6 +759,8 @@ export function LlmPanel({
             onRemoteDecode={openRemoteDecode}
             onRemotePrefill={openRemotePrefill}
           />
+          <LlmTerminal llm={llm ?? null} visible={terminalOpen} />
+
           <LlmDailyChart sparkId={sparkId} llmPort={llmPort} />
         </div>
       ) : (
@@ -885,6 +904,8 @@ export function LlmPanel({
               </div>
             </>
           )}
+
+          <LlmTerminal llm={llm} visible={terminalOpen} />
 
           <LlmTrendChart sparkId={sparkId} llmPort={llmPort} />
           <LlmDailyChart sparkId={sparkId} llmPort={llmPort} />

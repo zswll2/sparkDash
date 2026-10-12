@@ -32,6 +32,15 @@ import {
   serializeSessionCookie,
   sessionCookieName,
   verifyPassword,
+  readonlyState,
+  isHardLocked,
+  isReadonly,
+  elevateSession,
+  lockSession,
+  readonlyUnlockTtlMs,
+  unlockStatus,
+  verifyUnlockPassword,
+  requestReadonlyElevation,
 } from "./auth.js";
 import { inspectHealth } from "./health.js";
 import { tlsEnabled, resolveTlsOptions, tlsStartupError } from "./tls.js";
@@ -415,11 +424,100 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.use(createAuthMiddleware());
 
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", (req, res) => {
   // Read-only state can flip at any moment (config/readonly.mode); a cached 304
-  // would keep the UI showing enabled controls the server refuses.
+  // would keep the UI showing enabled controls the server refuses. The same
+  // applies to this session's unlock, so the payload carries it per request.
   res.set("Cache-Control", "no-store");
-  res.json(inspectHealth(process.env.BIND_HOST || "127.0.0.1"));
+  res.json(
+    inspectHealth(process.env.BIND_HOST || "127.0.0.1", {
+      elevation: requestReadonlyElevation(req),
+    })
+  );
+});
+
+// ─── Read-only unlock (separate password, audit-logged) ──────────────────
+// A UI toggle for the read-only file would let whoever stole a session switch
+// the protection off — so the file stays shell-only. Instead the operator can
+// trade the *separate* unlock password for a bounded window of full control on
+// their own session. Same failure lockout as the login route: a wrong password
+// costs attempts on the caller's own source address, never the fleet.
+const unlockAttempts = new Map();
+
+function unlockLockedFor(ip) {
+  const state = unlockAttempts.get(ip);
+  if (!state) return 0;
+  return Math.max(0, state.lockedUntil - Date.now());
+}
+
+export function __resetUnlockLimiterForTest() {
+  unlockAttempts.clear();
+}
+
+app.post("/api/readonly/unlock", (req, res) => {
+  const ip = clientKey(req);
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  const session = id ? getSession(id) : null;
+  const who = session?.user ?? req.authUser ?? "unknown";
+
+  if (isHardLocked()) {
+    console.warn(`[readonly] unlock refused (hard lock) from ${ip} user=${who}`);
+    return res.status(403).json({
+      error: "Read-only mode: unlocking is disabled on this server (hard lock)",
+    });
+  }
+  if (!isReadonly()) {
+    // Already fully open; nothing to unlock, and no window to count down.
+    return res.json({ ok: true, readonlyState: readonlyState(), unlocked: false, expiresAt: null });
+  }
+  if (unlockLockedFor(ip) > 0) {
+    return res.status(429).json({ error: "Too many failed unlock attempts; try again later" });
+  }
+  if (!session) {
+    // Unlock is per session because it is stored on the session. Scripts use
+    // the mode file or SPARKDASH_READONLY=0 instead.
+    return res.status(403).json({ error: "Unlocking needs a browser session (sign in first)" });
+  }
+  const status = unlockStatus();
+  if (!status.configured) {
+    console.warn(`[readonly] unlock attempted with no unlock password configured from ${ip} user=${who}`);
+    return res.status(409).json({
+      error: status.error
+        ? `Unlock password unusable: ${status.error}`
+        : "No unlock password configured on the server (npm run readonly:passwd)",
+    });
+  }
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!verifyUnlockPassword(password)) {
+    const state = unlockAttempts.get(ip) || { fails: 0, lockedUntil: 0 };
+    state.fails += 1;
+    if (state.fails >= loginMaxFails()) state.lockedUntil = Date.now() + loginLockMs();
+    unlockAttempts.set(ip, state);
+    console.warn(
+      `[readonly] unlock FAILED from ${ip} user=${who} (attempt ${state.fails}${state.lockedUntil ? ", now locked" : ""})`
+    );
+    return res.status(401).json({ error: "Invalid unlock password" });
+  }
+  unlockAttempts.delete(ip);
+  const expiresAt = elevateSession(id, readonlyUnlockTtlMs());
+  console.warn(
+    `[readonly] UNLOCKED by user=${who} from ${ip} until ${new Date(expiresAt).toISOString()}`
+  );
+  return res.json({
+    ok: true,
+    readonlyState: readonlyState(),
+    unlocked: true,
+    expiresAt,
+    ttlMs: readonlyUnlockTtlMs(),
+  });
+});
+
+app.post("/api/readonly/lock", (req, res) => {
+  const ip = clientKey(req);
+  const id = parseCookieHeader(req.headers?.cookie)[sessionCookieName()];
+  if (id) lockSession(id);
+  console.warn(`[readonly] locked again by user=${req.authUser ?? "unknown"} from ${ip}`);
+  return res.json({ ok: true, readonlyState: readonlyState(), unlocked: false, expiresAt: null });
 });
 
 function clientKey(req) {

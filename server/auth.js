@@ -144,37 +144,136 @@ function accountConfigured() {
  * password costs data confidentiality, not the fleet (this panel can power off
  * machines and rewrite SSH passwords).
  *
- * The mode comes from a file that is re-read per request, so an operator can
- * switch it from a shell without restarting the service:
- *   "full"                                   → state changes allowed
- *   anything else, missing, or unreadable    → read-only (fail closed)
+ * The posture comes from a file re-read on every request, so an operator can
+ * change it from a shell without restarting the service:
+ *   "full"                                 → state changes allowed
+ *   "locked"                               → hard lock; the in-app unlock refuses too
+ *   anything else, missing, or unreadable  → read-only, unlockable with the
+ *                                            separate unlock password
  *
- * Deliberately NOT exposed over HTTP: a toggle in the UI would let whoever
- * stole the session switch the protection off.
+ * "readonly" is the normal public posture: the operator types the unlock
+ * password in Settings and gets control for a bounded window (README default
+ * 30 min, renewed while they keep working). "locked" is for the case where even
+ * that must be impossible (suspected unlock-password leak) — it can only be
+ * lifted from a shell on the host.
+ *
+ * The unlock password is deliberately NOT the login password: it lives in its
+ * own file (config/readonly.json, 0600), so a leaked dashboard password still
+ * cannot power off the fleet.
  */
 export function readonlyModePath() {
   if (process.env.SPARKDASH_READONLY_MODE_FILE) return process.env.SPARKDASH_READONLY_MODE_FILE;
   return path.join(path.dirname(authConfigPath()), "readonly.mode");
 }
 
-/** true = state-changing requests are rejected. Missing/unreadable file ⇒ true. */
-export function isReadonly() {
+/**
+ * Posture read from the mode file. Missing/unreadable/unknown ⇒ "readonly"
+ * (fail closed): a broken file must never silently open the fleet.
+ * @returns {"full"|"readonly"|"locked"}
+ */
+export function readonlyState() {
   // Escape hatch for local development or an emergency; needs a restart to apply.
-  if (process.env.SPARKDASH_READONLY === "0") return false;
+  if (process.env.SPARKDASH_READONLY === "0") return "full";
+  let raw;
   try {
-    const raw = readFileSync(readonlyModePath(), "utf-8");
-    return raw.trim().split(/\s+/)[0]?.toLowerCase() !== "full";
+    raw = readFileSync(readonlyModePath(), "utf-8");
   } catch {
-    return true;
+    return "readonly";
   }
+  const value = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
+  if (value === "full") return "full";
+  if (value === "locked") return "locked";
+  return "readonly";
+}
+
+/** true = state-changing requests are rejected unless this session is elevated. */
+export function isReadonly() {
+  return readonlyState() !== "full";
+}
+
+/** true = hard lock: the in-app unlock is refused as well. */
+export function isHardLocked() {
+  return readonlyState() === "locked";
+}
+
+// ─── Unlock credential (separate secret, its own file) ───────────────────
+// Same record schema as auth.json minus the user field:
+// { algo:"scrypt", N, r, p, keylen, salt(32hex), hash(128hex), updatedAt }
+
+export function readonlyUnlockPath() {
+  if (process.env.SPARKDASH_READONLY_UNLOCK_JSON) return process.env.SPARKDASH_READONLY_UNLOCK_JSON;
+  return path.join(path.dirname(authConfigPath()), "readonly.json");
+}
+
+/** How long one unlock lasts before it must be repeated (renewed on activity). */
+export function readonlyUnlockTtlMs() {
+  const parsed = parseInt(process.env.SPARKDASH_READONLY_UNLOCK_TTL_MS || "1800000", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800000;
 }
 
 /**
- * Requests that stay allowed in read-only mode: they change no state, and
- * logging out must keep working. Everything else that is not a plain read is
- * refused.
+ * @returns {object|null} null when no unlock password is configured yet.
+ * @throws on malformed JSON or unsafe permissions — unlock then stays refused.
  */
-const READONLY_ALLOWED = ["/api/auth/logout", /^\/api\/sparks\/[^/]+\/refresh\/[^/]+$/];
+export function loadUnlockFile() {
+  const file = readonlyUnlockPath();
+  let st;
+  try {
+    st = statSync(file);
+  } catch (err) {
+    if (err && err.code === "ENOENT") return null;
+    throw err;
+  }
+  const mode = st.mode & 0o777;
+  if (mode & 0o077) {
+    throw new Error(
+      `Refusing readonly.json with insecure permissions ${mode.toString(8).padStart(3, "0")} (want 600): ${file}`
+    );
+  }
+  let record;
+  try {
+    record = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    throw new Error(`config/readonly.json is unreadable or not valid JSON: ${err.message}`);
+  }
+  if (!record || typeof record.salt !== "string" || typeof record.hash !== "string") {
+    throw new Error("config/readonly.json is malformed (need string fields: salt, hash)");
+  }
+  return record;
+}
+
+/** { configured, error } — safe to call from the unauthenticated-safe health path. */
+export function unlockStatus() {
+  try {
+    return { configured: loadUnlockFile() !== null, error: null };
+  } catch (err) {
+    return { configured: false, error: err.message };
+  }
+}
+
+/** Constant-time check against the stored unlock hash. Never throws. */
+export function verifyUnlockPassword(password) {
+  let record;
+  try {
+    record = loadUnlockFile();
+  } catch {
+    return false; // malformed or unreadable credential = nobody can unlock
+  }
+  if (!record) return false;
+  return verifyPassword(password, record);
+}
+
+/**
+ * Requests that stay allowed in read-only mode: they change no state, logging
+ * out must keep working, and unlocking from the UI must be reachable — the
+ * unlock route itself checks the separate unlock password.
+ */
+const READONLY_ALLOWED = [
+  "/api/auth/logout",
+  "/api/readonly/unlock",
+  "/api/readonly/lock",
+  /^\/api\/sparks\/[^/]+\/refresh\/[^/]+$/,
+];
 
 export function isReadonlyAllowed(reqPath) {
   return READONLY_ALLOWED.some((entry) =>
@@ -203,8 +302,8 @@ export function createAuthMiddleware() {
      *    below (session, bearer token, loopback-without-account). One check here
      *    can't be forgotten on a route the way a per-route guard could.
      */
-    const proceed = () => {
-      if (mutating && isReadonly() && !isReadonlyAllowed(reqPath)) {
+    const proceed = (elevated = false) => {
+      if (mutating && isReadonly() && !elevated && !isReadonlyAllowed(reqPath)) {
         console.warn(
           `[readonly] blocked ${method} ${reqPath} from ${clientAddress(req) || "unknown"} user=${
             req.authUser ?? "bearer"
@@ -220,19 +319,22 @@ export function createAuthMiddleware() {
     // 4. Valid session cookie.
     const session = sessionFromRequest(req);
     if (session) {
-      touchSession(session.id);
+      // Only a state-changing request counts as "activity": a dashboard tab that
+      // merely polls /api/health must not hold an unattended window open forever.
+      touchSession(session.id, { renewUnlock: mutating });
       req.authUser = session.user;
-      return proceed();
+      req.readonlyUnlocked = sessionElevated(session);
+      return proceed(req.readonlyUnlocked);
     }
 
     // 5. Valid Bearer token (script compatibility).
     const expected = configuredToken();
     const provided = extractBearer(req);
-    if (expected && provided && tokensEqual(provided, expected)) return proceed();
+    if (expected && provided && tokensEqual(provided, expected)) return proceed(false);
 
     // 6. Loopback local trust only while no account is configured — keeps
     //    server-side curl debugging working on a fresh install.
-    if (isLoopbackRequest(req) && !accountConfigured()) return proceed();
+    if (isLoopbackRequest(req) && !accountConfigured()) return proceed(false);
 
     // 7. Denied.
     return res.status(401).json({ error: "Authentication required" });
@@ -478,16 +580,68 @@ export function getSession(id) {
     sessions.delete(id);
     return null;
   }
-  return { user: session.user, createdAt: session.createdAt, lastSeen: session.lastSeen };
+  return {
+    user: session.user,
+    createdAt: session.createdAt,
+    lastSeen: session.lastSeen,
+    /** Read-only unlock deadline for this session (epoch ms), or null when locked. */
+    elevatedUntil: session.elevatedUntil ?? null,
+  };
+}
+
+/**
+ * Grant one session a bounded window of full control. Stored in memory like the
+ * session itself, so a service restart drops every unlock (fail closed) and no
+ * unlock token can be replayed from disk.
+ * @returns {number|null} the new deadline (epoch ms), or null when the session is gone.
+ */
+export function elevateSession(id, ttlMs = readonlyUnlockTtlMs()) {
+  const session = sessions.get(id);
+  if (!session) return null;
+  session.elevatedUntil = Date.now() + ttlMs;
+  return session.elevatedUntil;
+}
+
+/** Drop the unlock right away (operator pressed Lock now / signed out). */
+export function lockSession(id) {
+  const session = sessions.get(id);
+  if (session) delete session.elevatedUntil;
+}
+
+/** True while this session object carries a live unlock. */
+export function sessionElevated(session) {
+  const until = session?.elevatedUntil;
+  return typeof until === "number" && until > Date.now();
+}
+
+/** Unlock state of the request's session — for the health payload. */
+export function requestReadonlyElevation(req) {
+  const session = sessionFromRequest(req);
+  if (!session) return { unlocked: false, expiresAt: null, user: null };
+  const unlocked = sessionElevated(session);
+  return {
+    unlocked,
+    expiresAt: unlocked ? session.elevatedUntil : null,
+    user: session.user ?? null,
+  };
 }
 
 export function destroySession(id) {
+  // Deleting the record drops the read-only unlock with it.
   sessions.delete(id);
 }
 
-export function touchSession(id) {
+export function touchSession(id, { renewUnlock = false } = {}) {
   const session = sessions.get(id);
-  if (session) session.lastSeen = Date.now();
+  if (!session) return;
+  const now = Date.now();
+  session.lastSeen = now;
+  // Sliding window on *writes*: a long operation (rolling update, cluster
+  // shutdown) is not cut in half by the TTL, while a tab that only polls the
+  // health endpoint cannot keep an unattended window open indefinitely.
+  if (renewUnlock && typeof session.elevatedUntil === "number" && session.elevatedUntil > now) {
+    session.elevatedUntil = now + readonlyUnlockTtlMs();
+  }
 }
 
 export function __resetSessionsForTest() {

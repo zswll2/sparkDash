@@ -44,10 +44,14 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   // same rule — this is only about the message the operator sees.
   const method = (opts?.method || "GET").toUpperCase();
   const clientAllowed =
-    path === "/api/auth/login" || path === "/api/auth/logout" || path.includes("/refresh/");
+    path === "/api/auth/login" ||
+    path === "/api/auth/logout" ||
+    path === "/api/readonly/unlock" ||
+    path === "/api/readonly/lock" ||
+    path.includes("/refresh/");
   if (readonlyState && method !== "GET" && method !== "HEAD" && !clientAllowed) {
     throw new Error(
-      t("Read-only mode: this dashboard is view-only. Switch it on the server to operate the fleet.")
+      t("Read-only mode: this dashboard is view-only. Unlock it in Settings to operate the fleet.")
     );
   }
   // Only set Content-Type for requests that actually carry a body. Setting it
@@ -64,6 +68,16 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     if (res.status === 401) {
       throw new AuthRequiredError(res.status, body.error || "Authentication required");
+    }
+    // The server refused a write because the read-only window closed (expired,
+    // revoked, or flipped while this tab was idle): tell the app shell so it can
+    // re-read the real state instead of leaving enabled-looking controls.
+    if (
+      res.status === 403 &&
+      typeof body.error === "string" &&
+      body.error.startsWith("Read-only mode")
+    ) {
+      notifyReadonlyBlocked();
     }
     throw new Error(body.error || `HTTP ${res.status}`);
   }
@@ -84,6 +98,14 @@ export interface Health {
   tls: boolean;
   /** true = the server refuses state-changing requests (public posture). */
   readonly: boolean;
+  /** "full" | "readonly" | "locked" — "readonly" can be unlocked from Settings. */
+  readonlyState?: ReadonlyState;
+  /** True while THIS session holds a live unlock (full control, time-boxed). */
+  readonlyUnlocked?: boolean;
+  /** Unlock deadline (epoch ms) for this session, or null while locked. */
+  readonlyUnlockExpiresAt?: number | null;
+  /** False when the server has no unlock password yet. */
+  readonlyUnlockConfigured?: boolean;
   errors: string[];
   warnings: string[];
 }
@@ -95,9 +117,23 @@ export interface Health {
  * authority — this only improves the message.
  */
 let readonlyState = false;
+let readonlyBlockedHandler: (() => void) | null = null;
 
 export function setReadonlyState(readonly: boolean): void {
   readonlyState = Boolean(readonly);
+}
+
+/**
+ * Registered by the app shell. Called when the server rejects a write with the
+ * read-only message, so the UI can re-read the posture/unlock state (the window
+ * may have expired, or an operator flipped the mode file).
+ */
+export function setReadonlyBlockedHandler(handler: (() => void) | null): void {
+  readonlyBlockedHandler = handler;
+}
+
+function notifyReadonlyBlocked(): void {
+  readonlyBlockedHandler?.();
 }
 
 export function isReadonlyClient(): boolean {
@@ -115,8 +151,37 @@ export function fetchAuthSession(): Promise<AuthSession> {
  */
 export function fetchHealth(): Promise<Health> {
   // Never serve this from the HTTP cache: the read-only flag can flip at any
-  // moment, and a stale value leaves enabled-looking controls behind.
+  // moment, and a stale value leaves enabled-looking controls behind. The same
+  // applies to this session's unlock window, which the payload carries.
   return apiFetch<Health>("/api/health", { cache: "no-store" });
+}
+
+/** Server-wide read-only posture. */
+export type ReadonlyState = "full" | "readonly" | "locked";
+
+export interface ReadonlyUnlockResult {
+  ok: boolean;
+  readonlyState: ReadonlyState;
+  unlocked: boolean;
+  expiresAt: number | null;
+  ttlMs?: number;
+}
+
+/**
+ * Trade the *separate* unlock password for a bounded window of full control on
+ * this session. The login password is deliberately not enough: the unlock
+ * secret never leaves the host, and the window closes on its own.
+ */
+export function unlockReadonly(password: string): Promise<ReadonlyUnlockResult> {
+  return apiFetch<ReadonlyUnlockResult>("/api/readonly/unlock", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
+/** Close the window immediately, without waiting for the TTL. */
+export function lockReadonly(): Promise<ReadonlyUnlockResult> {
+  return apiFetch<ReadonlyUnlockResult>("/api/readonly/lock", { method: "POST" });
 }
 
 export function login(username: string, password: string): Promise<{ ok: boolean; user: string }> {

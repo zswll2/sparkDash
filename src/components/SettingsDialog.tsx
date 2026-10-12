@@ -3,7 +3,9 @@ import { fetchSettings, updateSettings } from "../api/client";
 import type { Settings } from "../api/types";
 import { useModalPresence } from "../hooks/useModalPresence";
 import { t, setLanguage, revertLanguage } from "../i18n";
-import { useReadonly } from "../hooks/useReadonly";
+import { useReadonly, useReadonlyUnlock } from "../hooks/useReadonly";
+import { unlockReadonly } from "../api/client";
+import { formatRemaining } from "../shared/readonlyTime";
 import packageJson from "../../package.json";
 
 interface SettingsDialogProps {
@@ -31,6 +33,11 @@ const POLL_PRESETS = [
 
 export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) {
   const readonly = useReadonly();
+  const unlock = useReadonlyUnlock();
+  const [unlockDraft, setUnlockDraft] = useState("");
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlockClock, setUnlockClock] = useState(() => Date.now());
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -44,6 +51,14 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
   }, [onClose]);
 
   useEscape(handleClose);
+
+  // Ticking clock for the unlock countdown, only while a window is open.
+  useEffect(() => {
+    if (!unlock.unlocked || unlock.expiresAt == null) return;
+    setUnlockClock(Date.now());
+    const timer = window.setInterval(() => setUnlockClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [unlock.unlocked, unlock.expiresAt]);
 
   useEffect(() => {
     if (!open) {
@@ -91,6 +106,30 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleUnlock = async () => {
+    setUnlockBusy(true);
+    setUnlockError(null);
+    try {
+      const result = await unlockReadonly(unlockDraft);
+      unlock.applyUnlock(result.expiresAt);
+      setUnlockDraft("");
+    } catch (err: unknown) {
+      setUnlockError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUnlockBusy(false);
+    }
+  };
+
+  // Locking goes through the server — a local-only switch would leave the
+  // window open server-side until the TTL, which is exactly the state the
+  // operator just asked to leave.
+  const handleLock = async () => {
+    setUnlockBusy(true);
+    setUnlockError(null);
+    await unlock.lock();
+    setUnlockBusy(false);
   };
 
   if (!mounted) return null;
@@ -442,6 +481,68 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
             </div>
           </div>
         )}
+
+        {/* Read-only posture — the fleet-wide lock, opened with its own password */}
+        <div className="mt-5 border-t border-border pt-4">
+          <label className="text-xs text-muted">{t("Read-only mode")}</label>
+          <p className="mt-1 text-[10px] leading-snug text-muted">
+            {unlock.state === "full"
+              ? t("The server is not in read-only mode — full control is available.")
+              : unlock.state === "locked"
+                ? t("Hard lock: unlocking is disabled on the server. Only a shell on the host can lift it.")
+                : unlock.unlocked
+                  ? t("Unlocked — full control until")
+                  : unlock.configured
+                    ? t("Enter the unlock password to operate the fleet for a limited time.")
+                    : t("No unlock password is configured on the server (npm run readonly:passwd).")}
+          </p>
+          {unlock.unlocked && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="font-tabular text-xs font-semibold text-warning">
+                {unlock.expiresAt != null ? formatRemaining(unlock.expiresAt - unlockClock) : "—"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleLock()}
+                disabled={unlockBusy}
+                className="min-h-9 border border-warning/50 px-2.5 py-1 text-[11px] font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+              >
+                {t("Lock now")}
+              </button>
+            </div>
+          )}
+          {unlock.state === "readonly" && !unlock.unlocked && unlock.configured && (
+            <form
+              className="mt-2 flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleUnlock();
+              }}
+            >
+              <input
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                value={unlockDraft}
+                onChange={(e) => {
+                  setUnlockDraft(e.target.value);
+                  setUnlockError(null);
+                }}
+                placeholder={t("Unlock password")}
+                aria-label={t("Unlock password")}
+                className="min-w-0 flex-1 border border-border bg-surface px-2 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
+              />
+              <button
+                type="submit"
+                disabled={unlockBusy || unlockDraft === ""}
+                className="min-h-9 bg-accent px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+              >
+                {unlockBusy ? t("Unlocking…") : t("Unlock")}
+              </button>
+            </form>
+          )}
+          {unlockError && <p className="mt-1 text-[10px] text-danger">{unlockError}</p>}
+        </div>
 
         {/* Links */}
         <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border pt-3">

@@ -18,6 +18,7 @@
     "tls:gen": "bash tools/gen-cert.sh",
     "auth:init": "node tools/auth-init.mjs",
     "auth:hash": "node tools/auth-hash.mjs",
+    "readonly:passwd": "node tools/readonly-setpass.mjs",
     "preview": "vite preview",
     "start": "node server/index.js",
     "docker:up": "docker compose up -d",

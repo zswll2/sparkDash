@@ -5,7 +5,7 @@ Boots a throwaway instance (own port, own temp config, one-time account) and
 proves the gate on the *real* HTTP surface, not in unit-test shapes:
 
   1. every state-changing route is refused with the read-only message
-     (the allowlist — logout + manual refresh — still works)
+     (the allowlist — logout, manual refresh, read-only unlock/lock — still works)
   2. flipping config/readonly.mode to "full" takes effect WITHOUT a restart
   3. a real browser shows the read-only banner and a disabled batch button,
      and the banner disappears after the flip
@@ -74,6 +74,13 @@ WRITES = [
 ALLOWED = [
     ("POST", "/api/sparks/pve/refresh/cpu"),
     ("POST", "/api/sparks/pve/refresh/storage"),
+    # The unlock pair is reachable in read-only mode on purpose: one asks for the
+    # *separate* unlock password, the other closes the window again. Neither
+    # changes fleet state, and the unlock route does nothing without the password
+    # (this instance has none configured, so it answers 409 rather than opening
+    # anything). See tools/verify_unlock_terminal_ui.py for the full flow.
+    ("POST", "/api/readonly/unlock"),
+    ("POST", "/api/readonly/lock"),
 ]
 
 session = ""

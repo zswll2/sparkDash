@@ -1,7 +1,19 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppRoute, useRoute } from "./hooks/useRoute";
-import { fetchSparks, reorderSparks, fetchSettings, fetchAuthSession, fetchHealth, logout, setReadonlyState } from "./api/client";
+import {
+  fetchSparks,
+  reorderSparks,
+  fetchSettings,
+  fetchAuthSession,
+  fetchHealth,
+  logout,
+  setReadonlyState,
+  setReadonlyBlockedHandler,
+  lockReadonly,
+  type Health,
+  type ReadonlyState,
+} from "./api/client";
 import { LoginPage } from "./components/LoginPage";
 import { SparkTabs } from "./components/SparkTabs";
 import { AddSparkDialog } from "./components/AddSparkDialog";
@@ -16,7 +28,13 @@ import { t, setSavedLanguage, useLanguage } from "./i18n";
 import { GearIcon, BoltIcon, LogoutIcon } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ReadOnlyBanner } from "./components/ui/ReadOnlyBanner";
-import { ReadonlyProvider, useReadonly } from "./hooks/useReadonly";
+import {
+  ReadonlyProvider,
+  ReadonlyUnlockProvider,
+  useReadonly,
+  useReadonlyUnlock,
+  type ReadonlyUnlockState,
+} from "./hooks/useReadonly";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
 import { OVERVIEW_ID } from "./constants";
 import type { Settings, SparkSnapshot } from "./api/types";
@@ -146,6 +164,8 @@ function DashboardApp({ onSignOut }: { onSignOut?: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const readonly = useReadonly();
+  /** Posture + unlock window, for the banner and the Settings panel. */
+  const readonlyUnlock = useReadonlyUnlock();
   /** Used when WS is down so add/delete still updates the tab bar */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
   const staleAfterMs = Math.max(10_000, 3 * (refreshInterval ?? 2_000));
@@ -371,7 +391,15 @@ function DashboardApp({ onSignOut }: { onSignOut?: () => void }) {
           now={telemetryNow}
           stale={telemetryStale}
         />
-        {readonly ? <ReadOnlyBanner /> : null}
+        {readonlyUnlock.state !== "full" ? (
+          <ReadOnlyBanner
+            unlocked={readonlyUnlock.unlocked}
+            expiresAt={readonlyUnlock.expiresAt}
+            onLock={() => {
+              void readonlyUnlock.lock();
+            }}
+          />
+        ) : null}
         <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />
         <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
           {isOverview ? (
@@ -445,8 +473,11 @@ type AuthGate = "checking" | "authed" | "anonymous";
 function App() {
   const route = useAppRoute();
   const [auth, setAuth] = useState<AuthGate>("checking");
-  /** Server read-only state — published on every tab so controls agree with the gate. */
-  const [readonly, setReadonly] = useState(false);
+  /** Server read-only posture + this session's unlock — see the effects below. */
+  const [readonlyState, setReadonlyStateValue] = useState<ReadonlyState>("readonly");
+  const [unlocked, setUnlocked] = useState(false);
+  const [unlockExpiresAt, setUnlockExpiresAt] = useState<number | null>(null);
+  const [unlockConfigured, setUnlockConfigured] = useState(false);
 
   const checkSession = useCallback(async () => {
     try {
@@ -461,34 +492,91 @@ function App() {
     void checkSession();
   }, [checkSession]);
 
+  const applyHealth = useCallback((health: Health) => {
+    setReadonlyStateValue(health.readonlyState ?? (health.readonly ? "readonly" : "full"));
+    setUnlocked(Boolean(health.readonlyUnlocked));
+    setUnlockExpiresAt(health.readonlyUnlockExpiresAt ?? null);
+    setUnlockConfigured(Boolean(health.readonlyUnlockConfigured));
+  }, []);
+
+  const loadHealth = useCallback(async () => {
+    try {
+      applyHealth(await fetchHealth());
+    } catch {
+      // Health unavailable: keep the last known state. The server still decides.
+    }
+  }, [applyHealth]);
+
   // Read-only mode lives on the server (config/readonly.mode) and is re-read per
   // request; the UI mirrors it so buttons are disabled rather than failing. It is
-  // re-checked periodically because an operator may flip it while this tab is open.
+  // re-checked periodically because an operator may flip it — or the unlock
+  // window may run out — while this tab is open.
   useEffect(() => {
     if (auth !== "authed") {
-      setReadonlyState(false);
-      setReadonly(false);
+      setReadonlyStateValue("readonly");
+      setUnlocked(false);
+      setUnlockExpiresAt(null);
       return;
     }
-    let cancelled = false;
-    const load = () => {
-      void fetchHealth()
-        .then((health) => {
-          if (cancelled) return;
-          setReadonly(health.readonly);
-          setReadonlyState(health.readonly);
-        })
-        .catch(() => {
-          // Health unavailable: keep the last known state. The server still decides.
-        });
-    };
-    load();
-    const timer = window.setInterval(load, 60_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [auth]);
+    void loadHealth();
+    const timer = window.setInterval(() => void loadHealth(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [auth, loadHealth]);
+
+  // A write rejected with the read-only message means our local view is stale:
+  // re-read the posture instead of leaving enabled-looking controls behind.
+  useEffect(() => {
+    setReadonlyBlockedHandler(() => {
+      void loadHealth();
+    });
+    return () => setReadonlyBlockedHandler(null);
+  }, [loadHealth]);
+
+  /** Full control only when the server is not locked, or this session unlocked it. */
+  const readonly = readonlyState !== "full" && !unlocked;
+
+  useEffect(() => {
+    setReadonlyState(readonly);
+  }, [readonly]);
+
+  // Drop the local unlock the moment the window closes: the countdown is the
+  // operator's only warning, and the server refuses those writes anyway.
+  useEffect(() => {
+    if (!unlocked || unlockExpiresAt == null) return;
+    const timer = window.setTimeout(() => {
+      setUnlocked(false);
+      setUnlockExpiresAt(null);
+    }, Math.max(0, unlockExpiresAt - Date.now()) + 250);
+    return () => window.clearTimeout(timer);
+  }, [unlocked, unlockExpiresAt]);
+
+  const unlockValue = useMemo<ReadonlyUnlockState>(
+    () => ({
+      state: readonlyState,
+      unlocked,
+      expiresAt: unlockExpiresAt,
+      configured: unlockConfigured,
+      applyUnlock: (expiresAt: number | null) => {
+        setUnlocked(true);
+        setUnlockExpiresAt(expiresAt);
+      },
+      applyLock: () => {
+        setUnlocked(false);
+        setUnlockExpiresAt(null);
+      },
+      lock: async () => {
+        try {
+          await lockReadonly();
+        } catch {
+          // Server unreachable: the TTL still closes the window, and dropping it
+          // locally keeps the banner from claiming control the server refuses.
+        }
+        setUnlocked(false);
+        setUnlockExpiresAt(null);
+      },
+    }),
+    [readonlyState, unlocked, unlockExpiresAt, unlockConfigured]
+  );
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -509,13 +597,15 @@ function App() {
     return <ShowcasePage sparkId={route.showcaseSparkId} />;
   }
   return (
-    <ReadonlyProvider value={readonly}>
-      <DashboardApp
-        onSignOut={() => {
-          void handleSignOut();
-        }}
-      />
-    </ReadonlyProvider>
+    <ReadonlyUnlockProvider value={unlockValue}>
+      <ReadonlyProvider value={readonly}>
+        <DashboardApp
+          onSignOut={() => {
+            void handleSignOut();
+          }}
+        />
+      </ReadonlyProvider>
+    </ReadonlyUnlockProvider>
   );
 }
 

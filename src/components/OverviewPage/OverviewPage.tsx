@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import type { SensorFan, SensorReading, SparkSnapshot } from "../../api/types";
 import { isWorkerSpark, resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/client";
@@ -127,12 +131,30 @@ function SparkCard({
 
   return (
     <div
-      className="overview-card flex flex-col"
+      className={`overview-card flex flex-col${onSelect ? " overview-card--clickable" : ""}`}
       style={{
         padding: "var(--density-card-pad)",
         gap: "var(--density-card-gap)",
         ...(online ? {} : { opacity: 0.6 }),
       }}
+      {...(onSelect
+        ? {
+            role: "button" as const,
+            tabIndex: 0,
+            title: t("Open details"),
+            "aria-label": `${spark.name} — ${t("Open details")}`,
+            onClick: (event: ReactMouseEvent<HTMLDivElement>) => {
+              // Nested controls (unit name, edit, actions) keep their own click.
+              if ((event.target as HTMLElement).closest("button, a, input, select, textarea")) return;
+              onSelect(spark.id);
+            },
+            onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onSelect(spark.id);
+            },
+          }
+        : {})}
     >
       {/* Card header */}
       <div className="flex items-center gap-2.5">
