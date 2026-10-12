@@ -16,6 +16,7 @@ export function ReadOnlyBanner({
   unlocked = false,
   expiresAt = null,
   onLock,
+  onUnlock,
 }: {
   className?: string;
   /** True while this session holds a live unlock. */
@@ -23,6 +24,8 @@ export function ReadOnlyBanner({
   /** Unlock deadline (epoch ms) — drives the countdown. */
   expiresAt?: number | null;
   onLock?: () => void;
+  /** Opens Settings, where the unlock password is asked for. */
+  onUnlock?: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -72,6 +75,15 @@ export function ReadOnlyBanner({
       <span>
         {t("Read-only mode — this dashboard is view-only. Operations are disabled on the server.")}
       </span>
+      {onUnlock && (
+        <button
+          type="button"
+          onClick={onUnlock}
+          className="ml-auto shrink-0 border border-warning/50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors hover:bg-warning/20"
+        >
+          {t("Unlock")}
+        </button>
+      )}
     </div>
   );
 }

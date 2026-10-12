@@ -37,6 +37,15 @@ describe("ReadOnlyBanner", () => {
     expect(container.textContent ?? "").toContain("unlocked for this session");
     expect(container.textContent ?? "").not.toContain("Remaining");
   });
+
+  it("offers the way in while locked", () => {
+    const onUnlock = vi.fn();
+    const { container } = render(<ReadOnlyBanner onUnlock={onUnlock} />);
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("Unlock");
+    act(() => button?.click());
+    expect(onUnlock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("formatRemaining", () => {

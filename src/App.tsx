@@ -398,6 +398,7 @@ function DashboardApp({ onSignOut }: { onSignOut?: () => void }) {
             onLock={() => {
               void readonlyUnlock.lock();
             }}
+            onUnlock={() => setShowSettings(true)}
           />
         ) : null}
         <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />

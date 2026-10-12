@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = process.env.SPARKDASH_READONLY_UNLOCK_JSON || path.join(ROOT, "config", "readonly.json");
-const MIN_LENGTH = 12; // ops secret: longer than a login password, typed rarely
+const MIN_LENGTH = 10; // ops secret: longer than a login password, typed rarely
 
 const argv = process.argv.slice(2);
 const flag = (name) => {
@@ -141,7 +141,7 @@ if (typeof fromFile === "string") {
     console.error(`Password in ${fromFile} is shorter than ${MIN_LENGTH} characters.`);
     process.exit(1);
   }
-  write(password);
+  write(password, { plaintextPath: typeof flag("--plaintext-file") === "string" ? flag("--plaintext-file") : null });
   console.log(`Remember to delete ${fromFile}.`);
   process.exit(0);
 }

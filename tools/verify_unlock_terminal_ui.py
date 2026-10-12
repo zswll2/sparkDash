@@ -220,17 +220,28 @@ def verify_ui() -> None:
         check("locked banner is shown", "只读模式" in body and "仅可查看" in body)
         check("no English fallback leaked into the banner", "this dashboard is view-only" not in body)
 
-        # ── Settings: unlock with the wrong password, then the right one ──
-        page.locator("button[aria-label='设置']").first.click()
-        page.wait_for_timeout(800)
-        check("settings offers the unlock password field", page.locator("input[placeholder='解锁口令']").count() == 1)
+        # ── The banner must lead there: an operator could not find the box ──
+        banner_unlock = page.locator("button:has-text('解锁')")
+        check("the locked banner offers a way in", banner_unlock.count() == 1, f"{banner_unlock.count()} buttons")
+        banner_unlock.first.click()
+        page.wait_for_timeout(1200)
+        check("the banner button opens Settings", page.locator(".settings-panel").count() == 1)
+
+        field = page.locator("input[placeholder='解锁口令']")
+        check("settings offers the unlock password field", field.count() == 1)
+        box = field.first.bounding_box()
+        check(
+            "the unlock box sits at the top of the panel (no hunting/scrolling)",
+            bool(box) and box["y"] < 700,
+            f"y={round(box['y']) if box else None}",
+        )
         page.fill("input[placeholder='解锁口令']", "definitely-wrong")
-        page.locator("button:has-text('解锁')").first.click()
+        page.locator(".settings-panel button:has-text('解锁')").first.click()
         page.wait_for_timeout(1500)
         check("the wrong password surfaces the server error", "Invalid unlock password" in page.inner_text("body"))
 
         page.fill("input[placeholder='解锁口令']", UNLOCK_SECRET)
-        page.locator("button:has-text('解锁')").first.click()
+        page.locator(".settings-panel button:has-text('解锁')").first.click()
         page.wait_for_timeout(1800)
         unlocked_body = page.inner_text("body")
         check("the banner switches to the unlocked variant", "本次会话已解锁只读模式" in unlocked_body)
